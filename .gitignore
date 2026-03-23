@@ -1,0 +1,10 @@
+.cache/
+__pycache__/
+*.pyc
+*.pyo
+veli_strategies.db
+.env
+*.png
+
+mnt/
+.git/
