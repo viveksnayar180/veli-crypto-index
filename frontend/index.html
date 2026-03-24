@@ -177,7 +177,7 @@ const LineChart = ({data, height=280}) => {
     });
     return ()=>{if(ch.current){ch.current.destroy();ch.current=null;}};
   },[data]);
-  return <canvas ref={ref} style={{height,width:'100%',display:'block'}}/>;
+  return <canvas ref={ref} style={{position:'absolute',top:0,left:0,width:'100%',height:'100%',display:'block'}}/>;
 };
 
 const DDChart = ({data, height=120}) => {
@@ -906,13 +906,15 @@ const Step3 = ({state, set, onNext, onBack}) => {
             </div>
           </div>
         </div>
-        <div style={card}>
+        <div style={{...card, alignSelf:'start', position:'sticky', top:20}}>
           <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:12}}>
             <span style={{color:'var(--muted)',fontSize:11,textTransform:'uppercase',letterSpacing:'0.08em'}}>Weight Preview</span>
             {loadW&&<Spin sz={14}/>}
           </div>
           {weights.length>0?(<>
-            <PieChart weights={weights} height={200}/>
+            <div style={{position:'relative',height:200,width:'100%'}}>
+              <PieChart weights={weights} height={200}/>
+            </div>
             <div style={{marginTop:12,maxHeight:200,overflowY:'auto'}}>
               {(()=>{ const maxW=Math.max(...weights.slice(0,15).map(w=>w.weight),1); return weights.slice(0,15).map((w,i)=>(
                 <div key={w.id} style={{display:'flex',alignItems:'center',gap:8,padding:'4px 0'}}>
