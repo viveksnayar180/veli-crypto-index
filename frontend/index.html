@@ -470,7 +470,7 @@ const Step1 = ({state, set, onNext}) => {
     return ()=>document.removeEventListener('mousedown', handler);
   },[]);
 
-  const MAJOR=['bitcoin','ethereum','binancecoin','solana','xrp','cardano','avalanche-2','chainlink','polkadot','litecoin'];
+  const MAJOR=['bitcoin','ethereum','binancecoin','solana','ripple','cardano','avalanche-2','chainlink','polkadot','litecoin'];
 
   const apply=(t, coinList)=>{
     const c=(coinList||coins).filter(c=>!c.is_stablecoin);

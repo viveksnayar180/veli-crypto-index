@@ -32,6 +32,15 @@ STABLECOINS = {
 CEX_SLUG = "centralized-exchange"
 
 
+def _get_auth_header(key: str) -> dict:
+    """Return the correct auth header for the given API key type."""
+    if not key:
+        return {}
+    if key.startswith("CG-"):
+        return {"x-cg-demo-api-key": key}
+    return {"x-cg-pro-api-key": key}
+
+
 class CoinGeckoFetcher:
     def __init__(self):
         self.session = requests.Session()
