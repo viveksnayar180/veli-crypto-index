@@ -1,0 +1,663 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8"/>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+  <title>Veli — Crypto Index Builder</title>
+  <link href="https://fonts.googleapis.com/css2?family=Space+Mono:wght@400;700&family=DM+Sans:wght@300;400;500;600&display=swap" rel="stylesheet">
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/react/18.2.0/umd/react.production.min.js" crossorigin></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/react-dom/18.2.0/umd/react-dom.production.min.js" crossorigin></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/babel-standalone/7.23.2/babel.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.min.js"></script>
+  <style>
+    :root{--bg:#080c10;--surface:#0e1419;--raised:#141b24;--border:#1e2a36;--border2:#263040;--text:#e2e8f0;--muted:#5a7080;--accent:#3d8bff;--accent2:#00e5c8;--green:#22c55e;--red:#f43f5e;--amber:#f59e0b;--purple:#a855f7;--mono:'Space Mono',monospace;--body:'DM Sans',sans-serif}
+    *,*::before,*::after{box-sizing:border-box;margin:0;padding:0}
+    html{font-size:14px}
+    body{background:var(--bg);color:var(--text);font-family:var(--body);min-height:100vh}
+    ::-webkit-scrollbar{width:4px;height:4px}
+    ::-webkit-scrollbar-track{background:var(--surface)}
+    ::-webkit-scrollbar-thumb{background:var(--border2);border-radius:2px}
+    input[type=range]{accent-color:var(--accent);cursor:pointer}
+    input,select{color-scheme:dark}
+    @keyframes fadeUp{from{opacity:0;transform:translateY(10px)}to{opacity:1;transform:none}}
+    @keyframes spin{to{transform:rotate(360deg)}}
+    .fade-up{animation:fadeUp .25s ease-out}
+    .spin{animation:spin .9s linear infinite}
+    body::before{content:'';position:fixed;inset:0;pointer-events:none;z-index:0;background-image:linear-gradient(var(--border) 1px,transparent 1px),linear-gradient(90deg,var(--border) 1px,transparent 1px);background-size:40px 40px;opacity:.15}
+    #root{position:relative;z-index:1}
+  </style>
+</head>
+<body>
+<div id="root"></div>
+<script id="app" type="text/babel">
+const { useState, useEffect, useCallback, useMemo, useRef } = React;
+
+const api = {
+  async get(p) {
+    const r = await fetch(p);
+    if (!r.ok) { const e = await r.json().catch(()=>({error:r.statusText})); throw new Error(e.error||r.statusText); }
+    return r.json();
+  },
+  async post(p, body) {
+    const r = await fetch(p, { method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify(body) });
+    if (!r.ok) { const e = await r.json().catch(()=>({error:r.statusText})); throw new Error(e.error||r.statusText); }
+    return r.json();
+  },
+  async del(p) {
+    const r = await fetch(p, { method:'DELETE' });
+    if (!r.ok) throw new Error(r.statusText);
+    return r.json();
+  }
+};
+
+const PALETTE = ['#3d8bff','#00e5c8','#a855f7','#f59e0b','#f43f5e','#22c55e','#fb923c','#38bdf8','#e879f9','#84cc16'];
+
+const CHART_DEFAULTS = {
+  responsive:true, maintainAspectRatio:false, animation:false,
+  interaction:{ mode:'index', intersect:false },
+  plugins:{
+    legend:{ labels:{ color:'#5a7080', font:{family:'Space Mono',size:10}, boxWidth:12, padding:16 }},
+    tooltip:{ backgroundColor:'#0e1419', borderColor:'#1e2a36', borderWidth:1, titleColor:'#5a7080', bodyColor:'#e2e8f0', padding:10, titleFont:{family:'DM Sans'}, bodyFont:{family:'Space Mono',size:11} }
+  },
+  scales:{
+    x:{ grid:{color:'#1e2a36'}, ticks:{color:'#5a7080', font:{family:'Space Mono',size:9}, maxTicksLimit:8} },
+    y:{ grid:{color:'#1e2a36'}, ticks:{color:'#5a7080', font:{family:'Space Mono',size:9}, maxTicksLimit:6}, border:{dash:[3,3]} }
+  }
+};
+
+// ── Styles
+const card = { background:'var(--surface)', border:'1px solid var(--border)', borderRadius:10, padding:'18px 20px' };
+const inp  = { background:'var(--raised)', border:'1px solid var(--border2)', borderRadius:7, padding:'8px 12px', color:'var(--text)', width:'100%', fontFamily:'var(--body)', fontSize:13, outline:'none' };
+const btn  = (v='primary') => ({
+  background: v==='primary'?'linear-gradient(135deg,#3d8bff,#00e5c8)':'transparent',
+  border: v==='ghost'?'1px solid var(--border2)':'none',
+  borderRadius:8, padding:'9px 20px', color:v==='primary'?'#080c10':'var(--text)',
+  fontFamily:'var(--body)', fontWeight:600, fontSize:13, cursor:'pointer',
+  display:'inline-flex', alignItems:'center', gap:6, transition:'opacity .15s', whiteSpace:'nowrap'
+});
+
+// ── Tiny components
+const Spin = ({sz=18}) => <svg width={sz} height={sz} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" className="spin"><path d="M21 12a9 9 0 1 1-6.219-8.56" strokeLinecap="round"/></svg>;
+const Badge = ({label, color='var(--accent)'}) => <span style={{background:`${color}22`,border:`1px solid ${color}44`,color,borderRadius:20,padding:'2px 9px',fontSize:11,fontWeight:600,fontFamily:'var(--mono)',whiteSpace:'nowrap'}}>{label}</span>;
+const Toggle = ({on, onChange, label}) => (
+  <label style={{display:'flex',alignItems:'center',gap:10,cursor:'pointer'}}>
+    <div style={{position:'relative',width:36,height:20}} onClick={()=>onChange(!on)}>
+      <div style={{position:'absolute',inset:0,borderRadius:10,background:on?'var(--accent)':'var(--border2)',transition:'background .2s'}}/>
+      <div style={{position:'absolute',top:3,left:on?17:3,width:14,height:14,borderRadius:'50%',background:'#fff',transition:'left .2s'}}/>
+    </div>
+    <span style={{color:'var(--muted)',fontSize:13}}>{label}</span>
+  </label>
+);
+const Slider = ({label, value, onChange, min=0, max=100, step=1, fmt=v=>`${v}%`}) => (
+  <div>
+    <div style={{display:'flex',justifyContent:'space-between',marginBottom:6}}>
+      <span style={{color:'var(--muted)',fontSize:12}}>{label}</span>
+      <span style={{color:'var(--accent)',fontFamily:'var(--mono)',fontSize:12}}>{fmt(value)}</span>
+    </div>
+    <input type="range" min={min} max={max} step={step} value={value} onChange={e=>onChange(Number(e.target.value))} style={{width:'100%',height:4}}/>
+  </div>
+);
+const Sel = ({value, onChange, opts}) => (
+  <select value={value} onChange={e=>onChange(e.target.value)} style={{...inp,cursor:'pointer'}}>
+    {opts.map(o=><option key={o.v} value={o.v}>{o.l}</option>)}
+  </select>
+);
+const Tile = ({label, value, sub, color='var(--accent)'}) => (
+  <div style={{...card,padding:'14px 16px'}}>
+    <div style={{color:'var(--muted)',fontSize:11,marginBottom:4,textTransform:'uppercase',letterSpacing:'0.08em'}}>{label}</div>
+    <div style={{fontSize:22,fontWeight:700,fontFamily:'var(--mono)',color,lineHeight:1}}>{value}</div>
+    {sub&&<div style={{color:'var(--muted)',fontSize:11,marginTop:4}}>{sub}</div>}
+  </div>
+);
+
+// ── Chart.js wrappers
+const LineChart = ({data, height=280}) => {
+  const ref=useRef(); const ch=useRef();
+  useEffect(()=>{
+    if(!ref.current||!data?.labels) return;
+    if(ch.current) ch.current.destroy();
+    const ctx=ref.current.getContext('2d');
+    const g=ctx.createLinearGradient(0,0,0,height);
+    g.addColorStop(0,'rgba(61,139,255,0.25)'); g.addColorStop(1,'rgba(61,139,255,0)');
+    ch.current=new Chart(ctx,{
+      type:'line',
+      data:{ labels:data.labels, datasets:[
+        {label:'Strategy',data:data.strategy,borderColor:'#3d8bff',borderWidth:2,backgroundColor:g,fill:true,tension:0.3,pointRadius:0,pointHoverRadius:4},
+        {label:'BTC Benchmark',data:data.btc,borderColor:'#f59e0b',borderWidth:1.5,borderDash:[5,3],fill:false,tension:0.3,pointRadius:0,pointHoverRadius:4}
+      ]},
+      options:{
+        ...CHART_DEFAULTS,
+        scales:{
+          x:{...CHART_DEFAULTS.scales.x,ticks:{...CHART_DEFAULTS.scales.x.ticks,callback:(_,i)=>{const n=data.labels.length;return i%(Math.floor(n/6))||i===0?data.labels[i]:'';}}},
+          y:{...CHART_DEFAULTS.scales.y,ticks:{...CHART_DEFAULTS.scales.y.ticks,callback:v=>`$${v>=1000?(v/1000).toFixed(1)+'k':v.toFixed(0)}`}}
+        },
+        plugins:{...CHART_DEFAULTS.plugins,tooltip:{...CHART_DEFAULTS.plugins.tooltip,callbacks:{label:c=>`${c.dataset.label}: $${Number(c.raw).toLocaleString(undefined,{maximumFractionDigits:0})}`}}}
+      }
+    });
+    return ()=>{if(ch.current){ch.current.destroy();ch.current=null;}};
+  },[data]);
+  return <canvas ref={ref} style={{height,width:'100%',display:'block'}}/>;
+};
+
+const DDChart = ({data, height=120}) => {
+  const ref=useRef(); const ch=useRef();
+  useEffect(()=>{
+    if(!ref.current||!data?.labels) return;
+    if(ch.current) ch.current.destroy();
+    const ctx=ref.current.getContext('2d');
+    const g=ctx.createLinearGradient(0,0,0,height);
+    g.addColorStop(0,'rgba(244,63,94,0.4)'); g.addColorStop(1,'rgba(244,63,94,0)');
+    ch.current=new Chart(ctx,{
+      type:'line',
+      data:{labels:data.labels,datasets:[{label:'Drawdown',data:data.dd,borderColor:'#f43f5e',borderWidth:1.5,backgroundColor:g,fill:true,tension:0.3,pointRadius:0}]},
+      options:{
+        ...CHART_DEFAULTS,
+        scales:{
+          x:{...CHART_DEFAULTS.scales.x,ticks:{...CHART_DEFAULTS.scales.x.ticks,callback:(_,i)=>{const n=data.labels.length;return i%(Math.floor(n/6))||i===0?data.labels[i]:'';}}},
+          y:{...CHART_DEFAULTS.scales.y,ticks:{...CHART_DEFAULTS.scales.y.ticks,callback:v=>`${v.toFixed(0)}%`}}
+        },
+        plugins:{...CHART_DEFAULTS.plugins,legend:{display:false}}
+      }
+    });
+    return ()=>{if(ch.current){ch.current.destroy();ch.current=null;}};
+  },[data]);
+  return <canvas ref={ref} style={{height,width:'100%',display:'block'}}/>;
+};
+
+const PieChart = ({weights, height=200}) => {
+  const ref=useRef(); const ch=useRef();
+  useEffect(()=>{
+    if(!ref.current||!weights?.length) return;
+    if(ch.current) ch.current.destroy();
+    const top=weights.slice(0,9);
+    const oth=weights.slice(9).reduce((s,w)=>s+w.weight,0);
+    const data=oth>0?[...top,{symbol:'Others',weight:Math.round(oth*10)/10}]:top;
+    ch.current=new Chart(ref.current,{
+      type:'doughnut',
+      data:{labels:data.map(d=>d.symbol),datasets:[{data:data.map(d=>d.weight),backgroundColor:[...PALETTE,'#263040'],borderColor:'var(--surface)',borderWidth:2}]},
+      options:{responsive:true,maintainAspectRatio:false,animation:false,cutout:'60%',plugins:{legend:{position:'right',labels:{color:'#5a7080',font:{family:'Space Mono',size:9},boxWidth:8,padding:8}},tooltip:{...CHART_DEFAULTS.plugins.tooltip,callbacks:{label:c=>`${c.label}: ${Number(c.raw).toFixed(1)}%`}}}}
+    });
+    return ()=>{if(ch.current){ch.current.destroy();ch.current=null;}};
+  },[weights]);
+  return <canvas ref={ref} style={{height,width:'100%',display:'block'}}/>;
+};
+
+// ── Step nav
+const Steps = ({cur, go}) => {
+  const labels=['Universe','Filters','Construct','Backtest'];
+  return (
+    <div style={{display:'flex',alignItems:'center',gap:4,marginBottom:32}}>
+      {labels.map((l,i)=>(
+        <React.Fragment key={i}>
+          <button onClick={()=>i<cur&&go(i)} style={{display:'flex',alignItems:'center',gap:8,padding:'8px 14px',borderRadius:8,border:'none',cursor:i<cur?'pointer':'default',background:i===cur?'var(--raised)':'transparent',borderLeft:i===cur?'2px solid var(--accent)':'2px solid transparent',transition:'all .15s'}}>
+            <span style={{width:22,height:22,borderRadius:'50%',display:'flex',alignItems:'center',justifyContent:'center',fontSize:11,fontWeight:700,fontFamily:'var(--mono)',background:i===cur?'var(--accent)':i<cur?'var(--border2)':'transparent',color:i===cur?'#080c10':i<cur?'var(--accent2)':'var(--border2)',border:i>cur?'1px solid var(--border2)':'none'}}>{i+1}</span>
+            <span style={{fontSize:12,fontWeight:500,color:i===cur?'var(--text)':i<cur?'var(--accent2)':'var(--border2)'}}>{l}</span>
+          </button>
+          {i<3&&<div style={{flex:1,height:1,background:i<cur?'var(--border2)':'var(--border)',minWidth:12}}/>}
+        </React.Fragment>
+      ))}
+    </div>
+  );
+};
+
+// ══ STEP 1
+const Step1 = ({state, set, onNext}) => {
+  const [coins,setCoins]=useState([]);
+  const [loading,setLoad]=useState(true);
+  const [search,setSrch]=useState('');
+  const [tpl,setTpl]=useState('top300');
+  useEffect(()=>{ api.get('/api/coins?n=500').then(d=>{setCoins(d.coins);setLoad(false);}).catch(()=>setLoad(false)); },[]);
+  const MAJOR=['bitcoin','ethereum','binancecoin','solana','xrp','cardano','avalanche-2','chainlink','polkadot','litecoin'];
+  const apply=(t)=>{
+    setTpl(t);
+    const c=coins.filter(c=>!c.is_stablecoin);
+    const newCoins = t==='top300'?c.slice(0,300).map(x=>x.id):t==='top500'?c.slice(0,500).map(x=>x.id):MAJOR;
+    const newTopX  = t==='top300'?300:t==='top500'?500:newCoins.length;
+    set(s=>({...s, selectedCoins:newCoins, topX:newTopX, filteredIds:[]}));
+  };
+  useEffect(()=>{if(coins.length&&!state.selectedCoins.length) apply('top300');},[coins.length]);
+  const visible=useMemo(()=>{
+    if(!search) return coins.slice(0,80);
+    const q=search.toLowerCase();
+    return coins.filter(c=>c.name.toLowerCase().includes(q)||c.symbol.toLowerCase().includes(q)).slice(0,40);
+  },[coins,search]);
+  const toggle=id=>set(s=>({...s,selectedCoins:s.selectedCoins.includes(id)?s.selectedCoins.filter(x=>x!==id):[...s.selectedCoins,id]}));
+  const fmtM=n=>!n?'—':n>=1e9?`$${(n/1e9).toFixed(1)}B`:`$${(n/1e6).toFixed(0)}M`;
+  return (
+    <div className="fade-up">
+      <h2 style={{fontSize:20,fontWeight:600,marginBottom:4}}>Investment Universe</h2>
+      <p style={{color:'var(--muted)',fontSize:13,marginBottom:24}}>Select which coins are eligible for your strategy.</p>
+      <div style={{display:'grid',gridTemplateColumns:'repeat(3,1fr)',gap:10,marginBottom:20}}>
+        {[{k:'top300',l:'Top 300',s:'By market cap'},{k:'top500',l:'Top 500',s:'By market cap'},{k:'btc_major',l:'BTC + Majors',s:'10 blue chips'}].map(t=>(
+          <button key={t.k} onClick={()=>coins.length&&apply(t.k)} disabled={!coins.length} style={{...card,opacity:coins.length?1:0.4,cursor:coins.length?'pointer':'not-allowed',border:`1px solid ${tpl===t.k?'var(--accent)':'var(--border)'}`,background:tpl===t.k?'rgba(61,139,255,0.08)':'var(--surface)',textAlign:'left',transition:'all .15s'}}>
+            <div style={{fontWeight:600,fontSize:13,color:tpl===t.k?'var(--accent)':'var(--text)'}}>{t.l}</div>
+            <div style={{color:'var(--muted)',fontSize:11,marginTop:2}}>{t.s}</div>
+          </button>
+        ))}
+      </div>
+      <div style={card}>
+        <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:12}}>
+          <span style={{color:'var(--muted)',fontSize:12}}>Coins</span>
+          <Badge label={`${state.selectedCoins.length} selected`} color="var(--accent2)"/>
+        </div>
+        <input placeholder="Search…" value={search} onChange={e=>setSrch(e.target.value)} style={{...inp,marginBottom:10}}/>
+        {loading?<div style={{display:'flex',justifyContent:'center',padding:32}}><Spin sz={24}/></div>:(
+          <div style={{maxHeight:300,overflowY:'auto'}}>
+            {visible.map((c,i)=>{
+              const sel=state.selectedCoins.includes(c.id);
+              return (
+                <div key={c.id} onClick={()=>toggle(c.id)} style={{display:'flex',alignItems:'center',gap:10,padding:'7px 8px',borderRadius:7,cursor:'pointer',marginBottom:2,background:sel?'rgba(61,139,255,0.07)':'transparent',transition:'background .1s'}}>
+                  <div style={{width:16,height:16,borderRadius:4,border:`1.5px solid ${sel?'var(--accent)':'var(--border2)'}`,background:sel?'var(--accent)':'transparent',flexShrink:0,display:'flex',alignItems:'center',justifyContent:'center',transition:'all .1s'}}>
+                    {sel&&<span style={{color:'#080c10',fontSize:10,fontWeight:900}}>✓</span>}
+                  </div>
+                  <span style={{color:'var(--muted)',fontSize:11,width:22,textAlign:'right',flexShrink:0,fontFamily:'var(--mono)'}}>{i+1}</span>
+                  <div style={{width:24,height:24,borderRadius:'50%',background:'var(--raised)',flexShrink:0,overflow:'hidden',display:'flex',alignItems:'center',justifyContent:'center'}}>
+                    {c.image?<img src={c.image} style={{width:'100%',height:'100%',objectFit:'cover'}} alt="" onError={e=>e.target.style.display='none'}/>:<span style={{fontSize:9,fontWeight:700}}>{c.symbol?.[0]?.toUpperCase()}</span>}
+                  </div>
+                  <div style={{flex:1,minWidth:0}}>
+                    <div style={{fontSize:13,fontWeight:500,color:sel?'var(--text)':'#94a3b8'}}>{c.name}</div>
+                    <div style={{fontSize:10,color:'var(--muted)',fontFamily:'var(--mono)'}}>{c.symbol?.toUpperCase()}</div>
+                  </div>
+                  <div style={{textAlign:'right',flexShrink:0}}>
+                    <div style={{fontSize:11,fontFamily:'var(--mono)',color:'var(--muted)'}}>{fmtM(c.market_cap)}</div>
+                    {c.is_stablecoin&&<Badge label="stable" color="var(--amber)"/>}
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        )}
+      </div>
+      <div style={{display:'flex',justifyContent:'flex-end',marginTop:20}}>
+        <button onClick={onNext} disabled={state.selectedCoins.length<2} style={{...btn(),opacity:state.selectedCoins.length<2?0.4:1}}>Apply Filters →</button>
+      </div>
+    </div>
+  );
+};
+
+// ══ STEP 2
+const Step2 = ({state, set, onNext, onBack, allCoins}) => {
+  const [cats,setCats]=useState([]);
+  useEffect(()=>{api.get('/api/categories').then(d=>setCats(d.categories)).catch(()=>{});}, []);
+  const coinMap=useMemo(()=>Object.fromEntries((allCoins||[]).map(c=>[c.id,c])),[allCoins]);
+  const filtered=useMemo(()=>{
+    let cs=state.selectedCoins.map(id=>coinMap[id]).filter(Boolean);
+    if(state.noStable) cs=cs.filter(c=>!c.is_stablecoin);
+    if(state.noMeme)   cs=cs.filter(c=>!(c.categories||[]).includes('meme-token'));
+    if(state.noCex)    { const CEX=new Set(['binancecoin','okb','crypto-com-chain','cronos','kucoin-token','huobi-token','gatechain-token','bitget-token','mexc-global','gate']); cs=cs.filter(c=>!CEX.has(c.id)); }
+    if(state.topX)     cs=cs.slice(0,state.topX);
+    if(state.minMcap)  cs=cs.filter(c=>(c.market_cap||0)>=state.minMcap*1e9);
+    if(state.minVol)   cs=cs.filter(c=>(c.total_volume||0)>=state.minVol*1e6);
+    if(state.selCats?.length) cs=cs.filter(c=>(c.categories||[]).some(cat=>state.selCats.includes(cat)));
+    return cs;
+  },[state,coinMap]);
+  const togCat=id=>set(s=>({...s,selCats:s.selCats?.includes(id)?s.selCats.filter(x=>x!==id):[...(s.selCats||[]),id]}));
+  return (
+    <div className="fade-up">
+      <h2 style={{fontSize:20,fontWeight:600,marginBottom:4}}>Apply Filters</h2>
+      <p style={{color:'var(--muted)',fontSize:13,marginBottom:24}}>Narrow down which coins make the cut.</p>
+      <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:16,marginBottom:16}}>
+        <div style={{display:'flex',flexDirection:'column',gap:14}}>
+          <div style={card}>
+            <div style={{color:'var(--muted)',fontSize:11,textTransform:'uppercase',letterSpacing:'0.08em',marginBottom:14}}>Exclusions</div>
+            <div style={{display:'flex',flexDirection:'column',gap:12}}>
+              <Toggle on={state.noStable} onChange={v=>set(s=>({...s,noStable:v}))} label="Remove stablecoins"/>
+              <Toggle on={state.noMeme}   onChange={v=>set(s=>({...s,noMeme:v}))}   label="Remove meme coins"/>
+              <Toggle on={state.noCex}    onChange={v=>set(s=>({...s,noCex:v}))}    label="Remove CEX tokens"/>
+            </div>
+          </div>
+          <div style={card}>
+            <div style={{color:'var(--muted)',fontSize:11,textTransform:'uppercase',letterSpacing:'0.08em',marginBottom:16}}>Universe Size</div>
+            <Slider label="Top X by market cap" value={state.topX ?? state.selectedCoins.length} onChange={v=>set(s=>({...s,topX:v}))} min={2} max={Math.min(state.selectedCoins.length,500)} step={1} fmt={v=>`Top ${v}`}/>
+          </div>
+          <div style={card}>
+            <div style={{color:'var(--muted)',fontSize:11,textTransform:'uppercase',letterSpacing:'0.08em',marginBottom:14}}>Thresholds</div>
+            <div style={{display:'flex',flexDirection:'column',gap:12}}>
+              <div><div style={{color:'var(--muted)',fontSize:12,marginBottom:5}}>Min Market Cap ($B)</div><input type="number" placeholder="e.g. 1" value={state.minMcap||''} onChange={e=>set(s=>({...s,minMcap:Number(e.target.value)||0}))} style={inp}/></div>
+              <div><div style={{color:'var(--muted)',fontSize:12,marginBottom:5}}>Min 24h Volume ($M)</div><input type="number" placeholder="e.g. 100" value={state.minVol||''} onChange={e=>set(s=>({...s,minVol:Number(e.target.value)||0}))} style={inp}/></div>
+            </div>
+          </div>
+        </div>
+        <div style={{display:'flex',flexDirection:'column',gap:14}}>
+          <div style={card}>
+            <div style={{color:'var(--muted)',fontSize:11,textTransform:'uppercase',letterSpacing:'0.08em',marginBottom:14}}>Category Filter</div>
+            <div style={{display:'flex',flexWrap:'wrap',gap:7}}>
+              {cats.map(cat=>{const on=state.selCats?.includes(cat.id);return(<button key={cat.id} onClick={()=>togCat(cat.id)} style={{padding:'5px 12px',borderRadius:20,fontSize:12,fontWeight:500,cursor:'pointer',background:on?`${cat.color}22`:'var(--raised)',border:`1px solid ${on?cat.color+'66':'var(--border2)'}`,color:on?cat.color:'var(--muted)',transition:'all .15s'}}>{cat.name}</button>);})}
+            </div>
+          </div>
+          <div style={{...card,flex:1}}>
+            <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:12}}>
+              <span style={{color:'var(--muted)',fontSize:11,textTransform:'uppercase',letterSpacing:'0.08em'}}>Live Preview</span>
+              <Badge label={`${filtered.length} coins`} color="var(--accent2)"/>
+            </div>
+            <div style={{maxHeight:240,overflowY:'auto'}}>
+              {filtered.slice(0,25).map((c,i)=>(
+                <div key={c.id} style={{display:'flex',alignItems:'center',gap:8,padding:'5px 0',borderBottom:'1px solid var(--border)'}}>
+                  <span style={{color:'var(--muted)',fontSize:10,width:18,textAlign:'right',fontFamily:'var(--mono)'}}>{i+1}</span>
+                  <div style={{width:18,height:18,borderRadius:'50%',background:'var(--raised)',overflow:'hidden',flexShrink:0}}>{c.image&&<img src={c.image} style={{width:'100%',height:'100%'}} alt="" onError={e=>e.target.style.display='none'}/>}</div>
+                  <span style={{flex:1,fontSize:12,color:'#94a3b8'}}>{c.name}</span>
+                  <span style={{fontSize:10,fontFamily:'var(--mono)',color:'var(--muted)'}}>{c.symbol?.toUpperCase()}</span>
+                </div>
+              ))}
+              {filtered.length>25&&<div style={{color:'var(--muted)',fontSize:11,paddingTop:6}}>+{filtered.length-25} more…</div>}
+            </div>
+          </div>
+        </div>
+      </div>
+      <div style={{display:'flex',justifyContent:'space-between',alignItems:'center'}}>
+        <button onClick={onBack} style={btn('ghost')}>← Back</button>
+        <button onClick={()=>{set(s=>({...s,filteredIds:filtered.map(c=>c.id)}));onNext();}} disabled={filtered.length<2} style={{...btn(),opacity:filtered.length<2?0.4:1}}>Portfolio Construction →</button>
+      </div>
+    </div>
+  );
+};
+
+// ══ STEP 3
+const Step3 = ({state, set, onNext, onBack}) => {
+  const [weights,setW]=useState([]);
+  const [loadW,setLW]=useState(false);
+  // Fix: inline all deps directly in useEffect — no stale closure, fires on mount and on any change
+  useEffect(()=>{
+    const coinIds = (state.filteredIds && state.filteredIds.length > 0)
+      ? state.filteredIds
+      : state.selectedCoins;
+    if (!coinIds || coinIds.length === 0) return;
+    const ids = coinIds.slice(0, 30).join(',');
+    setLW(true);
+    api.get(`/api/coins/preview?ids=${ids}&method=${state.method}&cap=${state.cap/100}&floor=${state.floor/100}`)
+       .then(d=>{ setW(d.weights); setLW(false); })
+       .catch(()=>setLW(false));
+  },[state.filteredIds, state.selectedCoins, state.method, state.cap, state.floor]);
+  const n=((state.filteredIds&&state.filteredIds.length>0)?state.filteredIds:state.selectedCoins).length;
+  const minCap=n>0?Math.ceil((100/n)*10)/10:0;
+  const capWarn=state.cap<minCap;
+  return (
+    <div className="fade-up">
+      <h2 style={{fontSize:20,fontWeight:600,marginBottom:4}}>Portfolio Construction</h2>
+      <p style={{color:'var(--muted)',fontSize:13,marginBottom:24}}>Define weights, constraints, rebalancing and fees.</p>
+      <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:16,marginBottom:16}}>
+        <div style={{display:'flex',flexDirection:'column',gap:14}}>
+          <div style={card}>
+            <div style={{color:'var(--muted)',fontSize:11,textTransform:'uppercase',letterSpacing:'0.08em',marginBottom:14}}>Methodology</div>
+            <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:10}}>
+              {[{k:'market_cap',l:'Market Cap',s:'Weight ∝ mcap',e:'📊'},{k:'equal',l:'Equal Weight',s:'1/N per coin',e:'⚖️'}].map(m=>(
+                <button key={m.k} onClick={()=>set(s=>({...s,method:m.k}))} style={{padding:'14px 12px',borderRadius:8,border:`1px solid ${state.method===m.k?'var(--accent)':'var(--border)'}`,background:state.method===m.k?'rgba(61,139,255,0.1)':'var(--raised)',cursor:'pointer',textAlign:'left',transition:'all .15s'}}>
+                  <div style={{fontSize:18,marginBottom:6}}>{m.e}</div>
+                  <div style={{fontWeight:600,fontSize:13,color:state.method===m.k?'var(--accent)':'var(--text)'}}>{m.l}</div>
+                  <div style={{fontSize:11,color:'var(--muted)',marginTop:2}}>{m.s}</div>
+                </button>
+              ))}
+            </div>
+          </div>
+          <div style={card}>
+            <div style={{color:'var(--muted)',fontSize:11,textTransform:'uppercase',letterSpacing:'0.08em',marginBottom:16}}>Constraints</div>
+            <div style={{display:'flex',flexDirection:'column',gap:18}}>
+              <Slider label="Max per coin (Cap)" value={state.cap} onChange={v=>set(s=>({...s,cap:v}))} min={1} max={100}/>
+              {capWarn&&<div style={{background:'rgba(245,158,11,0.1)',border:'1px solid rgba(245,158,11,0.3)',borderRadius:7,padding:'8px 12px',fontSize:11,color:'var(--amber)'}}>⚠ Cap {state.cap}% below min {minCap}% for {n} coins — will auto-adjust.</div>}
+              <Slider label="Min per coin (Floor)" value={state.floor} onChange={v=>set(s=>({...s,floor:v}))} min={0} max={10} step={0.1} fmt={v=>`${v}%`}/>
+            </div>
+          </div>
+          <div style={card}>
+            <div style={{color:'var(--muted)',fontSize:11,textTransform:'uppercase',letterSpacing:'0.08em',marginBottom:12}}>Rebalancing</div>
+            <Sel value={state.rebalFreq} onChange={v=>set(s=>({...s,rebalFreq:v}))} opts={[{v:'weekly',l:'Weekly'},{v:'monthly',l:'Monthly (recommended)'},{v:'quarterly',l:'Quarterly'},{v:'yearly',l:'Yearly'}]}/>
+          </div>
+          <div style={card}>
+            <div style={{color:'var(--muted)',fontSize:11,textTransform:'uppercase',letterSpacing:'0.08em',marginBottom:14}}>Fee Structure</div>
+            <div style={{display:'flex',flexDirection:'column',gap:12}}>
+              {[{k:'aumFee',l:'AUM Fee (% p.a.)',p:'1.0',h:'Charged weekly as 1/52 of annual'},{k:'rebFee',l:'Rebalancing Fee (%)',p:'0.3',h:'On traded amount each rebalance'},{k:'perfFee',l:'Performance Fee (%)',p:'15',h:'High-watermark — new ATH only'}].map(f=>(
+                <div key={f.k}>
+                  <div style={{color:'var(--muted)',fontSize:12,marginBottom:4}}>{f.l}</div>
+                  <input type="text" inputMode="decimal" placeholder={f.p}
+                    defaultValue={state[f.k] ?? f.p}
+                    onBlur={e=>{ const v=parseFloat(e.target.value); if(!isNaN(v)&&v>=0) set(s=>({...s,[f.k]:v})); else e.target.value=String(state[f.k]??f.p); }}
+                    style={inp}/>
+                  <div style={{color:'var(--muted)',fontSize:10,marginTop:3}}>{f.h}</div>
+                </div>
+              ))}
+            </div>
+          </div>
+        </div>
+        <div style={card}>
+          <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:12}}>
+            <span style={{color:'var(--muted)',fontSize:11,textTransform:'uppercase',letterSpacing:'0.08em'}}>Weight Preview</span>
+            {loadW&&<Spin sz={14}/>}
+          </div>
+          {weights.length>0?(<>
+            <PieChart weights={weights} height={200}/>
+            <div style={{marginTop:12,maxHeight:200,overflowY:'auto'}}>
+              {(()=>{ const maxW=Math.max(...weights.slice(0,15).map(w=>w.weight),1); return weights.slice(0,15).map((w,i)=>(
+                <div key={w.id} style={{display:'flex',alignItems:'center',gap:8,padding:'4px 0'}}>
+                  <div style={{width:8,height:8,borderRadius:'50%',background:PALETTE[i]||'var(--border2)',flexShrink:0}}/>
+                  <span style={{flex:1,fontSize:11,color:'#94a3b8',overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap'}}>{w.name}</span>
+                  <div style={{width:60,height:3,background:'var(--raised)',borderRadius:2,overflow:'hidden',flexShrink:0}}><div style={{height:'100%',width:`${(w.weight/maxW)*100}%`,background:PALETTE[i]||'var(--border2)',borderRadius:2}}/></div>
+                  <span style={{fontSize:11,fontFamily:'var(--mono)',color:'var(--accent2)',width:40,textAlign:'right',flexShrink:0}}>{w.weight?.toFixed(1)}%</span>
+                </div>
+              )); })()}
+              {weights.length>15&&<div style={{color:'var(--muted)',fontSize:11,paddingTop:4}}>+{weights.length-15} more…</div>}
+            </div>
+          </>):<div style={{display:'flex',alignItems:'center',justifyContent:'center',height:240,color:'var(--muted)',fontSize:13}}>Weights appear here…</div>}
+        </div>
+      </div>
+      <div style={{display:'flex',justifyContent:'space-between'}}>
+        <button onClick={onBack} style={btn('ghost')}>← Back</button>
+        <button onClick={onNext} style={btn()}>Run Backtest →</button>
+      </div>
+    </div>
+  );
+};
+
+// ══ STEP 4
+const Step4 = ({state, set, onBack}) => {
+  const [start,setStart]=useState(state.startDate||'2022-01-01');
+  const [end,setEnd]=useState(state.endDate||new Date().toISOString().slice(0,10));
+  const [inv,setInv]=useState(state.initInv||1000);
+  const [busy,setBusy]=useState(false);
+  const [err,setErr]=useState('');
+  const [res,setRes]=useState(state.results||null);
+  const [stale,setStale]=useState(false);
+  const markStale=()=>{ if(res) setStale(true); };
+  const [saveOpen,setSave]=useState(false);
+  const [saveName,setSName]=useState('');
+  const [saveMsg,setSMsg]=useState('');
+
+  const run=async()=>{
+    setBusy(true);setErr('');setRes(null);setStale(false);
+    const ids=(state.filteredIds&&state.filteredIds.length>0)?state.filteredIds:state.selectedCoins;
+    try {
+      const data=await api.post('/api/backtest',{coin_ids:ids,start_date:start,end_date:end,method:state.method,cap:state.cap/100,floor:state.floor/100,rebalance_freq:state.rebalFreq,initial_investment:inv,aum_fee:(state.aumFee??1)/100,rebalancing_fee:(state.rebFee??0.3)/100,performance_fee:(state.perfFee??15)/100});
+      setRes(data);
+      set(s=>({...s,results:data,startDate:start,endDate:end,initInv:inv}));
+    } catch(e){setErr(e.message);}
+    finally{setBusy(false);}
+  };
+
+  const doSave=async()=>{
+    if(!saveName.trim()) return;
+    try{await api.post('/api/strategies',{name:saveName,config:{...state,startDate:start,endDate:end,initInv:inv}});setSMsg('Saved!');setTimeout(()=>{setSave(false);setSMsg('');setSName('');},1500);}
+    catch(e){setSMsg('Error: '+e.message);}
+  };
+
+  const eqData=useMemo(()=>{
+    if(!res) return null;
+    const stride=Math.max(1,Math.floor(res.equity_curve.length/200));
+    const eq=res.equity_curve.filter((_,i)=>i%stride===0);
+    const bm=Object.fromEntries((res.benchmark_curve||[]).filter((_,i)=>i%stride===0).map(d=>[d.date,d.btc]));
+    return{labels:eq.map(d=>d.date),strategy:eq.map(d=>d.value),btc:eq.map(d=>bm[d.date]||0)};
+  },[res]);
+
+  const ddData=useMemo(()=>{
+    if(!res?.equity_curve) return null;
+    const stride=Math.max(1,Math.floor(res.equity_curve.length/200));
+    const pts=res.equity_curve.filter((_,i)=>i%stride===0);
+    let peak=pts[0]?.value||1;
+    return{labels:pts.map(d=>d.date),dd:pts.map(d=>{peak=Math.max(peak,d.value);return peak>0?((d.value-peak)/peak)*100:0;})};
+  },[res]);
+
+  const m=res?.metrics||{},bm=res?.btc_metrics||{},fee=res?.fee_summary||{};
+  const fmt=(v,d=2)=>Number(v||0).toFixed(d);
+  const fmtD=v=>`$${Number(v||0).toLocaleString(undefined,{maximumFractionDigits:0})}`;
+
+  return (
+    <div className="fade-up">
+      <h2 style={{fontSize:20,fontWeight:600,marginBottom:4}}>Backtest</h2>
+      <p style={{color:'var(--muted)',fontSize:13,marginBottom:24}}>Simulate historical performance of your strategy.</p>
+      <div style={{...card,marginBottom:16}}>
+        <div style={{display:'grid',gridTemplateColumns:'1fr 1fr 1fr auto',gap:14,alignItems:'end'}}>
+          <div><div style={{color:'var(--muted)',fontSize:11,marginBottom:5}}>Start Date</div><input type="date" value={start} onChange={e=>{setStart(e.target.value);markStale();}} style={inp}/></div>
+          <div><div style={{color:'var(--muted)',fontSize:11,marginBottom:5}}>End Date</div><input type="date" value={end} onChange={e=>{setEnd(e.target.value);markStale();}} style={inp}/></div>
+          <div><div style={{color:'var(--muted)',fontSize:11,marginBottom:5}}>Initial Investment (USD)</div><input type="number" min="1" value={inv} onChange={e=>setInv(Math.max(1,Number(e.target.value)||1))} style={inp}/></div>
+          <button onClick={run} disabled={busy} style={{...btn(),padding:'9px 24px',opacity:busy?0.6:1}}>{busy?<><Spin sz={15}/> Running…</>:<>▶ Run</>}</button>
+        </div>
+      </div>
+      {err&&<div style={{background:'rgba(244,63,94,0.1)',border:'1px solid rgba(244,63,94,0.3)',borderRadius:8,padding:'10px 14px',color:'var(--red)',fontSize:13,marginBottom:16}}>{err}</div>}
+      {res?.cap_warning&&<div style={{background:'rgba(245,158,11,0.1)',border:'1px solid rgba(245,158,11,0.3)',borderRadius:8,padding:'10px 14px',color:'var(--amber)',fontSize:12,marginBottom:16}}>⚠ {res.cap_warning}</div>}
+      {busy&&<div style={{textAlign:'center',padding:'64px 0',color:'var(--muted)'}}><div style={{display:'inline-flex',alignItems:'center',gap:12,fontSize:14}}><Spin sz={22}/> Fetching data & running simulation…</div><div style={{fontSize:11,marginTop:10,color:'var(--border2)'}}>30–120s for large universes</div></div>}
+      {stale&&res&&!busy&&<div style={{background:'rgba(245,158,11,0.08)',border:'1px solid rgba(245,158,11,0.3)',borderRadius:8,padding:'8px 14px',color:'var(--amber)',fontSize:12,marginBottom:8}}>⚠ Settings changed — click ▶ Run to refresh results.</div>}
+      {res&&!busy&&(
+        <div className="fade-up" style={{display:'flex',flexDirection:'column',gap:16}}>
+          <div style={{display:'grid',gridTemplateColumns:'repeat(6,1fr)',gap:10}}>
+            <Tile label="Total Return" value={`${m.total_return_pct>=0?'+':''}${fmt(m.total_return_pct,1)}%`} color={m.total_return_pct>=0?'var(--green)':'var(--red)'} sub={`BTC: ${bm.total_return_pct>=0?'+':''}${fmt(bm.total_return_pct,1)}%`}/>
+            <Tile label="Ann. Return"  value={`${m.annualised_return_pct>=0?'+':''}${fmt(m.annualised_return_pct,1)}%`} color={m.annualised_return_pct>=0?'var(--green)':'var(--red)'}/>
+            <Tile label="Max Drawdown" value={`${fmt(m.max_drawdown_pct,1)}%`} color="var(--red)" sub={`BTC: ${fmt(bm.max_drawdown_pct,1)}%`}/>
+            <Tile label="Sharpe"       value={fmt(m.sharpe_ratio,2)} color="var(--accent)" sub="Risk-free = 0"/>
+            <Tile label="Volatility"   value={`${fmt(m.annual_volatility_pct,1)}%`} color="var(--amber)"/>
+            <Tile label="End Value"    value={fmtD(m.end_value)} color="var(--accent2)" sub={`Started ${fmtD(m.start_value)}`}/>
+          </div>
+          <div style={card}>
+            <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:16}}>
+              <span style={{fontWeight:600,fontSize:14}}>Performance vs BTC Benchmark</span>
+              <div style={{display:'flex',gap:16,fontSize:11}}>
+                <span style={{display:'flex',alignItems:'center',gap:6,color:'var(--muted)'}}><span style={{width:20,height:2,background:'var(--accent)',display:'inline-block',borderRadius:1}}/> Strategy</span>
+                <span style={{display:'flex',alignItems:'center',gap:6,color:'var(--muted)'}}><span style={{width:20,height:2,background:'var(--amber)',display:'inline-block',borderRadius:1}}/> BTC</span>
+              </div>
+            </div>
+            <LineChart data={eqData} height={280}/>
+          </div>
+          <div style={card}>
+            <div style={{fontWeight:600,fontSize:13,marginBottom:14,color:'var(--muted)'}}>Drawdown</div>
+            <DDChart data={ddData} height={120}/>
+          </div>
+          <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:16}}>
+            <div style={card}>
+              <div style={{fontWeight:600,fontSize:13,marginBottom:14}}>Fee Breakdown</div>
+              {[{l:'AUM Fees',v:fee.aum,c:'var(--accent)'},{l:'Rebalancing Fees',v:fee.rebalancing,c:'var(--amber)'},{l:'Performance Fees',v:fee.performance,c:'var(--green)'},{l:'Total Fees',v:fee.total,c:'var(--red)',bold:true}].map(f=>(
+                <div key={f.l} style={{display:'flex',justifyContent:'space-between',padding:'7px 0',borderTop:f.bold?'1px solid var(--border)':'none',marginTop:f.bold?4:0}}>
+                  <span style={{fontSize:13,color:f.bold?'var(--text)':'var(--muted)',fontWeight:f.bold?600:400}}>{f.l}</span>
+                  <span style={{fontFamily:'var(--mono)',fontSize:12,color:f.c}}>${fmt(f.v,2)}</span>
+                </div>
+              ))}
+            </div>
+            <div style={card}>
+              <div style={{fontWeight:600,fontSize:13,marginBottom:14}}>Strategy Config</div>
+              {[['Universe',`${res.coin_count} coins`],['Method',state.method==='market_cap'?'Market Cap Weighted':'Equal Weighted'],['Cap / Floor',`${state.cap}% / ${state.floor}%`],['Rebalancing',state.rebalFreq],['AUM Fee',`${state.aumFee??1}% p.a.`],['Perf. Fee',`${state.perfFee??15}% (HWM)`],['High-WM',`$${Number(res.high_watermark||0).toLocaleString()}`]].map(([k,v])=>(
+                <div key={k} style={{display:'flex',justifyContent:'space-between',padding:'5px 0',borderBottom:'1px solid var(--border)'}}>
+                  <span style={{fontSize:12,color:'var(--muted)'}}>{k}</span>
+                  <span style={{fontSize:12,fontWeight:500}}>{v}</span>
+                </div>
+              ))}
+            </div>
+          </div>
+          <div style={{display:'flex',justifyContent:'flex-end'}}>
+            <button onClick={()=>setSave(true)} style={btn('ghost')}>💾 Save Strategy</button>
+          </div>
+        </div>
+      )}
+      <div style={{display:'flex',justifyContent:'space-between',marginTop:20}}>
+        <button onClick={onBack} style={btn('ghost')}>← Back</button>
+      </div>
+      {saveOpen&&(
+        <div style={{position:'fixed',inset:0,background:'rgba(0,0,0,0.7)',display:'flex',alignItems:'center',justifyContent:'center',zIndex:100}} onClick={()=>setSave(false)}>
+          <div style={{...card,width:320,boxShadow:'0 20px 60px rgba(0,0,0,0.6)'}} onClick={e=>e.stopPropagation()}>
+            <div style={{fontSize:16,fontWeight:700,marginBottom:16}}>Save Strategy</div>
+            <input placeholder="Strategy name…" value={saveName} onChange={e=>setSName(e.target.value)} onKeyDown={e=>e.key==="Enter"&&doSave()} style={{...inp,marginBottom:12}}/>
+            {saveMsg&&<div style={{fontSize:12,color:saveMsg.includes('Error')?'var(--red)':'var(--green)',marginBottom:10}}>{saveMsg}</div>}
+            <div style={{display:'flex',gap:10}}>
+              <button onClick={()=>setSave(false)} style={{...btn('ghost'),flex:1,justifyContent:'center'}}>Cancel</button>
+              <button onClick={doSave} style={{...btn(),flex:1,justifyContent:'center'}}>Save</button>
+            </div>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+};
+
+// ══ Drawer
+const Drawer = ({onLoad, onClose}) => {
+  const [list,setList]=useState([]);
+  const [busy,setBusy]=useState(true);
+  useEffect(()=>{api.get('/api/strategies').then(d=>{setList(d.strategies);setBusy(false);}).catch(()=>setBusy(false));},[]);
+  const [delErr,setDelErr]=useState('');
+  const del=async(id,e)=>{e.stopPropagation();try{await api.del(`/api/strategies/${id}`);setList(l=>l.filter(x=>x.id!==id));}catch(ex){setDelErr('Delete failed: '+ex.message);setTimeout(()=>setDelErr(''),3000);}};
+  return (
+    <div style={{position:'fixed',inset:0,background:'rgba(0,0,0,0.6)',zIndex:50}} onClick={onClose}>
+      <div style={{position:'absolute',right:0,top:0,bottom:0,width:300,background:'var(--surface)',borderLeft:'1px solid var(--border)',padding:20,overflowY:'auto'}} onClick={e=>e.stopPropagation()}>
+        <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:20}}>
+          <span style={{fontWeight:700,fontSize:15}}>Saved Strategies</span>
+          <button onClick={onClose} style={{color:'var(--muted)',background:'none',border:'none',cursor:'pointer',fontSize:18}}>✕</button>
+        </div>
+        {delErr&&<div style={{background:'rgba(244,63,94,0.1)',border:'1px solid rgba(244,63,94,0.3)',borderRadius:7,padding:'8px 12px',fontSize:12,color:'var(--red)',marginBottom:12}}>{delErr}</div>}
+        {busy?<div style={{display:'flex',justifyContent:'center',paddingTop:40}}><Spin/></div>
+          :list.length===0?<div style={{color:'var(--muted)',textAlign:'center',paddingTop:40,fontSize:13}}>No saved strategies yet</div>
+          :<div style={{display:'flex',flexDirection:'column',gap:10}}>{list.map(s=>(
+            <div key={s.id} onClick={()=>{onLoad(s.config);onClose();}} style={{...card,cursor:'pointer',transition:'border-color .15s'}} onMouseEnter={e=>e.currentTarget.style.borderColor='var(--accent)'} onMouseLeave={e=>e.currentTarget.style.borderColor='var(--border)'}>
+              <div style={{display:'flex',justifyContent:'space-between',alignItems:'center'}}>
+                <span style={{fontWeight:600,fontSize:13}}>{s.name}</span>
+                <button onClick={e=>del(s.id,e)} style={{color:'var(--muted)',background:'none',border:'none',cursor:'pointer',fontSize:13}} onMouseEnter={e=>e.currentTarget.style.color='var(--red)'} onMouseLeave={e=>e.currentTarget.style.color='var(--muted)'}>🗑</button>
+              </div>
+              <div style={{color:'var(--muted)',fontSize:11,marginTop:4}}>{new Date(s.created_at).toLocaleDateString()}</div>
+              <div style={{display:'flex',gap:6,marginTop:8,flexWrap:'wrap'}}>
+                {s.config?.method&&<Badge label={s.config.method==='market_cap'?'Mkt Cap':'Equal'} color="var(--accent)"/>}
+                {s.config?.rebalFreq&&<Badge label={s.config.rebalFreq} color="var(--accent2)"/>}
+              </div>
+            </div>
+          ))}</div>
+        }
+      </div>
+    </div>
+  );
+};
+
+// ══ ROOT
+const INIT={selectedCoins:[],filteredIds:[],selCats:[],noStable:true,noMeme:false,noCex:false,topX:300,minMcap:0,minVol:0,method:'market_cap',cap:30,floor:0.1,rebalFreq:'monthly',aumFee:1,rebFee:0.3,perfFee:15,startDate:'2022-01-01',endDate:new Date().toISOString().slice(0,10),initInv:1000,results:null};
+
+const App=()=>{
+  const [step,setStep]=useState(0);
+  const [state,setState]=useState(INIT);
+  const [allCoins,setCoins]=useState([]);
+  const [drawer,setDrawer]=useState(false);
+  useEffect(()=>{api.get('/api/coins?n=500').then(d=>setCoins(d.coins)).catch(()=>{});},[]);
+  const load=cfg=>{setState(s=>({...s,...cfg}));setStep(3);};
+  return (
+    <div style={{minHeight:'100vh'}}>
+      <header style={{borderBottom:'1px solid var(--border)',background:'rgba(8,12,16,0.9)',backdropFilter:'blur(10px)',position:'sticky',top:0,zIndex:40}}>
+        <div style={{maxWidth:1100,margin:'0 auto',padding:'0 24px',height:52,display:'flex',alignItems:'center',justifyContent:'space-between'}}>
+          <div style={{display:'flex',alignItems:'center',gap:12}}>
+            <div style={{width:30,height:30,borderRadius:8,background:'linear-gradient(135deg,#3d8bff,#00e5c8)',display:'flex',alignItems:'center',justifyContent:'center',fontWeight:900,fontSize:13,color:'#080c10',fontFamily:'Space Mono,monospace'}}>V</div>
+            <div><span style={{fontWeight:700,fontSize:14}}>Veli</span><span style={{color:'var(--muted)',fontSize:12,marginLeft:8}}>Crypto Index Builder</span></div>
+          </div>
+          <div style={{display:'flex',gap:10,alignItems:'center'}}>
+            {state.results&&<Badge label={`${state.results.coin_count} coins`} color="var(--accent2)"/>}
+            <button onClick={()=>setDrawer(true)} style={btn('ghost')}>📂 Saved</button>
+            <button onClick={()=>{setState(INIT);setStep(0);}} style={{...btn('ghost'),color:'var(--muted)'}}>↺</button>
+          </div>
+        </div>
+      </header>
+      <main style={{maxWidth:1100,margin:'0 auto',padding:'32px 24px'}}>
+        <Steps cur={step} go={setStep}/>
+        {step===0&&<Step1 state={state} set={setState} onNext={()=>setStep(1)}/>}
+        {step===1&&<Step2 state={state} set={setState} allCoins={allCoins} onNext={()=>setStep(2)} onBack={()=>setStep(0)}/>}
+        {step===2&&<Step3 state={state} set={setState} onNext={()=>setStep(3)} onBack={()=>setStep(1)}/>}
+        {step===3&&<Step4 state={state} set={setState} onBack={()=>setStep(2)}/>}
+      </main>
+      <footer style={{borderTop:'1px solid var(--border)',marginTop:60,padding:'20px 24px',textAlign:'center',fontSize:11,color:'var(--border2)'}}>Veli Index Builder v2.0 — Survivorship bias: universe uses today's top coins applied to historical data</footer>
+      {drawer&&<Drawer onLoad={load} onClose={()=>setDrawer(false)}/>}
+    </div>
+  );
+};
+
+ReactDOM.createRoot(document.getElementById('root')).render(<App/>);
+
+</script>
+</body>
+</html>
