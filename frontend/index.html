@@ -795,6 +795,15 @@ const Step2 = ({state, set, onNext, onBack, allCoins}) => {
     return universe.filter(c=>c.name.toLowerCase().includes(q)||c.symbol.toLowerCase().includes(q));
   },[universe,srch]);
 
+  // If a filter toggle removes a coin that was already picked, drop it from picked
+  useEffect(()=>{
+    const uIds=new Set(universe.map(c=>c.id));
+    setPicked(p=>{
+      const next=p.filter(id=>uIds.has(id));
+      return next.length===p.length?p:next; // avoid re-render if nothing changed
+    });
+  },[universe]);
+
   const MAX=5;
   const isPicked=id=>picked.includes(id);
   const toggle=id=>{
