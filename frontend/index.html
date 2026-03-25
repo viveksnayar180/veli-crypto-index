@@ -213,6 +213,39 @@ const DDChart = ({data, height=120}) => {
   );
 };
 
+const YearBarChart = ({data, height=180}) => {
+  const ref=useRef(); const ch=useRef();
+  useEffect(()=>{
+    if(!ref.current||!data?.labels) return;
+    if(ch.current) ch.current.destroy();
+    const ctx=ref.current.getContext('2d');
+    ch.current=new Chart(ctx,{
+      type:'bar',
+      data:{
+        labels:data.labels,
+        datasets:[
+          {label:'Strategy',data:data.strategy,backgroundColor:data.strategy.map(v=>v>=0?'rgba(52,211,153,0.8)':'rgba(244,63,94,0.8)'),borderRadius:3},
+          {label:'BTC',data:data.btc,backgroundColor:data.btc.map(v=>v>=0?'rgba(245,158,11,0.5)':'rgba(244,63,94,0.4)'),borderRadius:3}
+        ]
+      },
+      options:{
+        ...CHART_DEFAULTS,
+        scales:{
+          x:{...CHART_DEFAULTS.scales.x},
+          y:{...CHART_DEFAULTS.scales.y,ticks:{...CHART_DEFAULTS.scales.y.ticks,callback:v=>`${v>0?'+':''}${v.toFixed(0)}%`}}
+        },
+        plugins:{...CHART_DEFAULTS.plugins,legend:{display:true,position:'top',labels:{color:'#94a3b8',font:{size:11},boxWidth:12,padding:12}}}
+      }
+    });
+    return ()=>{if(ch.current){ch.current.destroy();ch.current=null;}};
+  },[data]);
+  return (
+    <div style={{position:'relative',height,width:'100%'}}>
+      <canvas ref={ref} style={{position:'absolute',top:0,left:0,width:'100%',height:'100%',display:'block'}}/>
+    </div>
+  );
+};
+
 const PieChart = ({weights, height=200}) => {
   const ref=useRef(); const ch=useRef();
   useEffect(()=>{
@@ -705,7 +738,18 @@ const Step1 = ({state, set, onNext}) => {
 const S2_CAT_MAP = {
   'layer-1': new Set(['bitcoin','ethereum','solana','cardano','avalanche-2','polkadot','cosmos','near','algorand','tron','eos','tezos','stellar','monero','litecoin','bitcoin-cash','ethereum-classic','vechain','hedera-hashgraph','iota','neo','ontology','zilliqa','waves','qtum','icon','lisk','stratis','ark','komodo','decred']),
   'decentralized-finance-defi': new Set(['uniswap','aave','compound-governance-token','maker','curve-dao-token','sushi','yearn-finance','bancor','balancer','1inch','synthetix-network-token','uma','ren','loopring','kyber-network-crystal','0x','dydx','venus','pancakeswap-token','convex-finance','frax-share','instadapp','alchemix','harvest-finance','badger-dao']),
-  'meme-token': new Set(['dogecoin','shiba-inu','pepe','floki','bone-shibaswap','dogelon-mars','baby-doge-coin','kishu-inu','safemoon','hoge-finance','akita-inu','samoyedcoin','pitbull','shibcoin','leash']),
+  'meme-token': new Set([
+    // Major meme coins (top-300 as of 2024-2025)
+    'dogecoin','shiba-inu','pepe','dogwifcoin','bonk','floki',
+    'brett','popcat','mog-coin','cat-in-a-dogs-world','turbo',
+    'book-of-meme','neiro-on-eth','neiro-ethereum','neiro','gigachad-2',
+    'coq-inu','myro','sundog','fwog','michi','andy-on-base','wen-4',
+    'mother-iggy','ponke','memecoin','wojak','pitbull',
+    // Older meme coins
+    'bone-shibaswap','dogelon-mars','baby-doge-coin','kishu-inu',
+    'safemoon','hoge-finance','akita-inu','samoyedcoin','shibcoin','leash',
+    'elongate','saitama-inu','floof','dogedash','moonrabbit',
+  ]),
   'artificial-intelligence': new Set(['fetch-ai','singularitynet','ocean-protocol','numeraire','cortex','matrix-ai-network','effect-network','dbc','deepbrain-chain','ai-network','bittensor','render-token','akash-network','gpt-token']),
   'real-world-assets-rwa': new Set(['chainlink','maker','centrifuge','goldfinch','maple','ribbon-finance','truefi','clearpool','credix','flux','ondo-finance','backed-finance']),
   'depin': new Set(['filecoin','helium','arweave','the-graph','ankr','storj','siacoin','akash-network','render-token','hivemapper','worldcoin','people']),
@@ -900,7 +944,7 @@ const Step3 = ({state, set, onNext, onBack}) => {
           <div style={card}>
             <div style={{color:'var(--muted)',fontSize:11,textTransform:'uppercase',letterSpacing:'0.08em',marginBottom:14}}>Fee Structure</div>
             <div style={{display:'grid',gridTemplateColumns:'1fr 1fr 1fr',gap:12}}>
-              {[{k:'aumFee',l:'AUM Fee (% p.a.)',p:'1.0',h:'Weekly 1/52'},{k:'rebFee',l:'Rebalancing Fee (%)',p:'0.3',h:'Per rebalance'},{k:'perfFee',l:'Performance Fee (%)',p:'15',h:'HWM — new ATH only'}].map(f=>(
+              {[{k:'aumFee',l:'AUM Fee (% p.a.)',p:'1.0',h:'Weekly 1/52'},{k:'rebFee',l:'Rebalancing Fee (%)',p:'0.3',h:'Per rebalance'},{k:'perfFee',l:'Performance Fee (%)',p:'15',h:'Weekly crystallisation'}].map(f=>(
                 <div key={f.k}>
                   <div style={{color:'var(--muted)',fontSize:12,marginBottom:4}}>{f.l}</div>
                   <input type="text" inputMode="decimal" placeholder={f.p}
@@ -992,6 +1036,26 @@ const Step4 = ({state, set, onBack}) => {
     return{labels:pts.map(d=>d.date),dd:pts.map(d=>{peak=Math.max(peak,d.value);return peak>0?((d.value-peak)/peak)*100:0;})};
   },[res]);
 
+  // ── Yearly returns (strategy + BTC) ─────────────────────────────────────
+  const yearData=useMemo(()=>{
+    if(!res?.equity_curve||res.equity_curve.length<2) return null;
+    // Build year→{first,last} lookup for strategy and BTC
+    const eq=res.equity_curve, bm=Object.fromEntries((res.benchmark_curve||[]).map(d=>[d.date,d.btc]));
+    const byYear={};
+    eq.forEach(p=>{
+      const y=p.date.slice(0,4);
+      if(!byYear[y]) byYear[y]={sFirst:p.value,sLast:p.value,bFirst:bm[p.date]||0,bLast:bm[p.date]||0};
+      byYear[y].sLast=p.value;
+      byYear[y].bLast=bm[p.date]||byYear[y].bLast;
+    });
+    const years=Object.keys(byYear).sort();
+    return{
+      labels:years,
+      strategy:years.map(y=>byYear[y].sFirst>0?((byYear[y].sLast/byYear[y].sFirst)-1)*100:0),
+      btc:years.map(y=>byYear[y].bFirst>0?((byYear[y].bLast/byYear[y].bFirst)-1)*100:0),
+    };
+  },[res]);
+
   const m=res?.metrics||{},bm=res?.btc_metrics||{},fee=res?.fee_summary||{};
   const fmt=(v,d=2)=>Number(v||0).toFixed(d);
   const fmtD=v=>`$${Number(v||0).toLocaleString(undefined,{maximumFractionDigits:0})}`;
@@ -1036,6 +1100,18 @@ const Step4 = ({state, set, onBack}) => {
             <div style={{fontWeight:600,fontSize:13,marginBottom:14,color:'var(--muted)'}}>Drawdown</div>
             <DDChart data={ddData} height={120}/>
           </div>
+          {yearData&&yearData.labels.length>0&&(
+            <div style={card}>
+              <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:16}}>
+                <span style={{fontWeight:600,fontSize:14}}>Year-over-Year Returns</span>
+                <div style={{display:'flex',gap:16,fontSize:11}}>
+                  <span style={{display:'flex',alignItems:'center',gap:6,color:'var(--muted)'}}><span style={{width:12,height:12,background:'rgba(52,211,153,0.8)',display:'inline-block',borderRadius:2}}/> Strategy</span>
+                  <span style={{display:'flex',alignItems:'center',gap:6,color:'var(--muted)'}}><span style={{width:12,height:12,background:'rgba(245,158,11,0.5)',display:'inline-block',borderRadius:2}}/> BTC</span>
+                </div>
+              </div>
+              <YearBarChart data={yearData} height={180}/>
+            </div>
+          )}
           <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:16}}>
             <div style={card}>
               <div style={{fontWeight:600,fontSize:13,marginBottom:14}}>Fee Breakdown</div>
@@ -1048,7 +1124,7 @@ const Step4 = ({state, set, onBack}) => {
             </div>
             <div style={card}>
               <div style={{fontWeight:600,fontSize:13,marginBottom:14}}>Strategy Config</div>
-              {[['Universe',`${res.coin_count} coins`],['Method',state.method==='market_cap'?'Market Cap Weighted':'Equal Weighted'],['Cap / Floor',`${state.cap}% / ${state.floor}%`],['Rebalancing',state.rebalFreq],['AUM Fee',`${state.aumFee??1}% p.a.`],['Perf. Fee',`${state.perfFee??15}% (HWM)`],['High-WM',`$${Number(res.high_watermark||0).toLocaleString()}`]].map(([k,v])=>(
+              {[['Universe',`${res.coin_count} coins`],['Method',state.method==='market_cap'?'Market Cap Weighted':'Equal Weighted'],['Cap / Floor',`${state.cap}% / ${state.floor}%`],['Rebalancing',state.rebalFreq],['AUM Fee',`${state.aumFee??1}% p.a.`],['Perf. Fee',`${state.perfFee??15}% (weekly)`],['ATH Value',`$${Number(res.high_watermark||0).toLocaleString()}`]].map(([k,v])=>(
                 <div key={k} style={{display:'flex',justifyContent:'space-between',padding:'5px 0',borderBottom:'1px solid var(--border)'}}>
                   <span style={{fontSize:12,color:'var(--muted)'}}>{k}</span>
                   <span style={{fontSize:12,fontWeight:500}}>{v}</span>

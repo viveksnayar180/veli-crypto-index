@@ -22,10 +22,20 @@ MAX_RETRIES       = 3
 os.makedirs(CACHE_DIR, exist_ok=True)
 
 STABLECOINS = {
+    # USD pegged — major
     "tether","usd-coin","binance-usd","dai","true-usd","frax","usdd",
+    "usde","ethena-usde","first-digital-usd","paypal-usd",
+    # USD pegged — newer / Sky ecosystem
+    "usds","spark-usd","crvusd","gho","usual-usd","usd0",
+    # USD pegged — other
     "paxos-standard","gemini-dollar","fei-usd","nusd","liquity-usd",
-    "euro-coin","first-digital-usd","paypal-usd","usde","ethena-usde",
-    "tether-eurt","stasis-eurs","ageur",
+    "alchemix-usd","origin-dollar","dola-borrowing-right","susd",
+    "pax-dollar","husd","val","neutrino","celo-dollar","reserve",
+    "iron-bank","mim","djed","iusd","usn","zusd","usdx","flex-usd",
+    # Euro pegged
+    "euro-coin","tether-eurt","stasis-eurs","ageur","angle-protocol",
+    # BTC / other collateral stable-ish (always excluded from analysis)
+    "wrapped-bitcoin","bitcoin-bep2",
 }
 
 # CoinGecko slugs for the categories we support
