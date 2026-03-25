@@ -26,7 +26,7 @@ STABLECOINS = {
     "tether","usd-coin","binance-usd","dai","true-usd","frax","usdd",
     "usde","ethena-usde","first-digital-usd","paypal-usd",
     # USD pegged — newer / Sky ecosystem
-    "usds","spark-usd","crvusd","gho","usual-usd","usd0",
+    "usds","spark-usd","crvusd","gho","usual-usd","usd0","usd1",
     # USD pegged — other
     "paxos-standard","gemini-dollar","fei-usd","nusd","liquity-usd",
     "alchemix-usd","origin-dollar","dola-borrowing-right","susd",
