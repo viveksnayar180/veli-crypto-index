@@ -5,13 +5,14 @@ Fee engine — five fee types, all deduct from actual portfolio value (units hel
   2. Exit fee:         % of final portfolio value charged once at strategy end
   3. AUM fee:          1% p.a. charged weekly (1%/52)
   4. Rebalancing fee:  0.3% on rebalanced amount (at each rebalance)
-  5. Performance fee:  15% on weekly gains (crystallised every period)
+  5. Performance fee:  15% on gains above all-time high (HWM), checked weekly
 
-Performance fee uses weekly crystallisation: charged every week the portfolio
-is above its value at the *previous* week's close — regardless of all-time
-high. The period watermark resets each week (up or down) so fees apply to any
-positive weekly return. The reported high_watermark is still the all-time high
-for display purposes.
+Performance fee uses a high-water mark (HWM) model:
+  - Fee is only charged when portfolio exceeds its previous all-time peak
+  - Fee is 15% of the gain ABOVE the previous HWM
+  - HWM advances to the gross peak so no gain is ever double-charged
+  - If portfolio drops and later recovers past old ATH, fee applies only
+    to the portion above the previous peak
 """
 
 AUM_FEE_ANNUAL       = 0.01
@@ -35,11 +36,9 @@ class FeeEngine:
         self.aum_fee_weekly = aum_fee_weekly
         self.rebalance_fee  = rebalance_fee
         self.perf_fee       = perf_fee
-        # high_watermark = all-time high (for display)
-        # period_watermark = last week's close (for fee calculation)
+        # high_watermark = all-time gross peak; advances only when fees are charged
         _start = initial_investment * (1.0 - entry_fee)
-        self.high_watermark   = _start
-        self.period_watermark = _start
+        self.high_watermark = _start
         self.total_fees_paid = {
             "entry":       0.0,
             "exit":        0.0,
@@ -78,23 +77,20 @@ class FeeEngine:
 
     def apply_performance_fee(self, current_value: float) -> float:
         """
-        Weekly crystallisation performance fee — 15% on any weekly gain.
+        High-water mark performance fee — 15% on gains above the all-time peak.
 
-        Charged when portfolio is above its value at the previous weekly
-        close (period_watermark), regardless of all-time high. After each
-        call the period_watermark is updated to current_value (post-fee),
-        so it tracks each week's close — up or down. The all-time high
-        (high_watermark) is updated separately for display.
+        Fee is only charged when the portfolio value exceeds the previous ATH.
+        The watermark advances to the gross peak (current_value before fee
+        deduction), ensuring no gain is ever taxed twice. If the portfolio
+        drops below the HWM it must fully recover past the old peak before
+        any further performance fee applies.
         """
-        if current_value <= self.period_watermark:
-            # Down week — no fee, but reset period watermark to new base
-            self.period_watermark = current_value
+        if current_value <= self.high_watermark:
             return 0.0
-        gain = current_value - self.period_watermark
+        gain = current_value - self.high_watermark
         fee  = gain * self.perf_fee
-        post_fee_value = current_value - fee
-        self.period_watermark = post_fee_value
-        self.high_watermark   = max(self.high_watermark, post_fee_value)
+        # HWM = gross peak so the same gain is never charged again
+        self.high_watermark = current_value
         self.total_fees_paid["performance"] += fee
         return fee
 

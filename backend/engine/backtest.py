@@ -38,6 +38,7 @@ def run_backtest(
     aum_fee:            float = 0.01,
     rebalancing_fee:    float = 0.003,
     performance_fee:    float = 0.15,
+    index_size:         int   = None,   # Dynamic top-N: hold only top N coins at each period
 ) -> dict:
 
     fee_engine = FeeEngine(
@@ -75,12 +76,20 @@ def run_backtest(
     start_prices = price_matrix.iloc[0]
     start_mcaps  = {k: v for k, v in mcap_matrix.iloc[0].to_dict().items()
                     if pd.notna(v) and v > 0}
-    initial_weights = compute_weights_from_mcaps(
-        coin_ids, start_mcaps, weighting_method, cap, floor)
+
+    # Dynamic index: pick only the top index_size coins by starting market cap
+    if index_size and index_size < len(coin_ids):
+        top_start = sorted(start_mcaps, key=lambda c: start_mcaps[c], reverse=True)[:index_size]
+        initial_weights = compute_weights_from_mcaps(
+            top_start, {c: start_mcaps[c] for c in top_start}, weighting_method, cap, floor)
+    else:
+        initial_weights = compute_weights_from_mcaps(
+            coin_ids, start_mcaps, weighting_method, cap, floor)
+
     units_held = {
         cid: (effective_investment * initial_weights.get(cid, 0.0)) / start_prices[cid]
         for cid in coin_ids
-        if start_prices.get(cid, 0) > 0
+        if start_prices.get(cid, 0) > 0 and initial_weights.get(cid, 0) > 0
     }
 
     # ── BTC benchmark ─────────────────────────────────────────────────────────
@@ -152,12 +161,25 @@ def run_backtest(
                 cid: mcap_matrix.loc[date, cid]
                 for cid in coin_ids
                 if cid in mcap_matrix.columns and pd.notna(mcap_matrix.loc[date, cid])
+                   and mcap_matrix.loc[date, cid] > 0
             }
+
+            # Dynamic index: select top index_size coins by current market cap
+            if index_size and index_size < len(coin_ids):
+                ranked = sorted(current_mcaps, key=lambda c: current_mcaps[c], reverse=True)
+                active_ids = ranked[:index_size]
+            else:
+                active_ids = coin_ids
+
+            active_mcaps = {cid: current_mcaps[cid] for cid in active_ids if cid in current_mcaps}
             try:
-                target_weights = compute_weights_from_mcaps(
-                    coin_ids, current_mcaps, weighting_method, cap, floor)
+                active_weights = compute_weights_from_mcaps(
+                    active_ids, active_mcaps, weighting_method, cap, floor)
             except ValueError:
-                target_weights = initial_weights
+                active_weights = {cid: 1.0 / len(active_ids) for cid in active_ids}
+
+            # Coins not in active_ids get weight 0 (fully sold)
+            target_weights = {cid: active_weights.get(cid, 0.0) for cid in coin_ids}
 
             _, reb_amount = compute_rebalance_trades(current_values, target_weights)
             reb_fee = fee_engine.apply_rebalancing_fee(reb_amount)
@@ -169,6 +191,8 @@ def run_backtest(
                 price = prices_today.get(cid, 0)
                 if price > 0:
                     units_held[cid] = (net_pv * target_weights.get(cid, 0.0)) / price
+                else:
+                    units_held[cid] = 0.0
 
         # ── Monthly weight snapshot ───────────────────────────────────────────
         if date.day == 1:
@@ -225,7 +249,8 @@ def run_backtest(
         "metrics":         metrics,
         "btc_metrics":     btc_metrics,
         "pnl_breakdown":   pnl_breakdown,
-        "coin_count":      len(coin_ids),
+        "coin_count":      index_size if index_size and index_size < len(coin_ids) else len(coin_ids),
+        "universe_size":   len(coin_ids),
         "high_watermark":  round(fee_engine.high_watermark, 2),
     }
 

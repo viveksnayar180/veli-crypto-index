@@ -299,20 +299,24 @@ def api_backtest():
     aum_fee     = float(body.get("aum_fee", 0.01))
     reb_fee     = float(body.get("rebalancing_fee", 0.003))
     perf_fee    = float(body.get("performance_fee", 0.15))
+    index_size  = int(body["index_size"]) if body.get("index_size") else None
 
     if not coin_ids:
         return error("coin_ids cannot be empty")
-    if len(coin_ids) < 2:
-        return error("At least 2 coins required")
+    if index_size and index_size < 2:
+        return error("index_size must be at least 2")
 
     # Warn if cap is too tight for coin count (won't crash — engine auto-adjusts)
-    min_viable_cap = 1.0 / len(coin_ids)
+    effective_n = index_size if index_size and index_size < len(coin_ids) else len(coin_ids)
+    if effective_n < 2:
+        return error("At least 2 coins required")
+    min_viable_cap = 1.0 / effective_n
     cap_warning = None
     if cap < min_viable_cap:
         auto_cap = round((min_viable_cap + 0.001) * 100, 1)
         cap_warning = (
             f"Cap {cap*100:.1f}% is below the minimum viable {min_viable_cap*100:.1f}% "
-            f"for {len(coin_ids)} coins. Auto-adjusted to {auto_cap}%."
+            f"for {effective_n} coins. Auto-adjusted to {auto_cap}%."
         )
     if method not in ("market_cap", "equal"):
         return error("method must be 'market_cap' or 'equal'")
@@ -328,9 +332,22 @@ def api_backtest():
         if not universe:
             return error("None of the provided coin_ids were found")
 
+        # When index_size is set, cap the universe for history fetching:
+        # only need the top (index_size × 4) coins — enough to cover all historical
+        # entrants/exits with a generous buffer, without fetching hundreds of histories.
+        fetch_universe = universe
+        if index_size and index_size < len(universe):
+            fetch_cap = min(len(universe), max(index_size * 4, 30))
+            # Sort by current market cap descending before capping
+            fetch_universe = sorted(
+                universe,
+                key=lambda c: c.get("market_cap") or 0,
+                reverse=True
+            )[:fetch_cap]
+
         # Fetch price histories
         fetch_start = start_date - timedelta(days=7)
-        histories   = fetcher.fetch_universe_history(universe, fetch_start, end_date)
+        histories   = fetcher.fetch_universe_history(fetch_universe, fetch_start, end_date)
 
         if len(histories) < 2:
             return error(

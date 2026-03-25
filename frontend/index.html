@@ -798,7 +798,7 @@ const Step2 = ({state, set, onNext, onBack, allCoins}) => {
     if(state.minMcap)  cs=cs.filter(c=>(c.market_cap||0)>=state.minMcap*1e9);
     if(state.minVol)   cs=cs.filter(c=>(c.total_volume||0)>=state.minVol*1e6);
     if(state.selCats?.length) cs=cs.filter(c=>c._cats.some(cat=>state.selCats.includes(cat)));
-    if(state.topX)     cs=cs.slice(0,state.topX);
+    // topX is the index size — do NOT slice here; full universe goes to backtest engine
     return cs;
   },[state,enrichedCoinMap]);
   const togCat=id=>set(s=>({...s,selCats:s.selCats?.includes(id)?s.selCats.filter(x=>x!==id):[...(s.selCats||[]),id]}));
@@ -875,7 +875,7 @@ const Step2 = ({state, set, onNext, onBack, allCoins}) => {
       )}
       <div style={{display:'flex',justifyContent:'space-between',alignItems:'center'}}>
         <button onClick={onBack} style={btn('ghost')}>← Back</button>
-        <button onClick={()=>{set(s=>({...s,filteredIds:filtered.map(c=>c.id)}));onNext();}}
+        <button onClick={()=>{set(s=>({...s,filteredIds:filtered.map(c=>c.id),indexSize:state.topX||null}));onNext();}}
           disabled={filtered.length<2||coinsLoading}
           style={{...btn(),opacity:(filtered.length<2||coinsLoading)?0.4:1}}>
           {coinsLoading?'Loading…':'Portfolio Construction →'}
@@ -902,13 +902,16 @@ const Step3 = ({state, set, onNext, onBack}) => {
       ? state.filteredIds
       : state.selectedCoins;
     if (!coinIds || coinIds.length === 0) return;
-    const ids = coinIds.slice(0, 30).join(',');
+    // Preview shows top indexSize (or topX) coins — never more than 30 for display
+    const previewN = Math.min(state.indexSize || state.topX || coinIds.length, 30);
+    const ids = coinIds.slice(0, previewN).join(',');
     setLW(true);
     api.get(`/api/coins/preview?ids=${ids}&method=${state.method}&cap=${state.cap/100}&floor=${state.floor/100}`)
        .then(d=>{ setW(d.weights); setLW(false); })
        .catch(()=>setLW(false));
-  },[state.filteredIds, state.selectedCoins, state.method, state.cap, state.floor]);
-  const n=((state.filteredIds&&state.filteredIds.length>0)?state.filteredIds:state.selectedCoins).length;
+  },[state.filteredIds, state.selectedCoins, state.indexSize, state.topX, state.method, state.cap, state.floor]);
+  const universeN=((state.filteredIds&&state.filteredIds.length>0)?state.filteredIds:state.selectedCoins).length;
+  const n=state.indexSize&&state.indexSize<universeN?state.indexSize:universeN;
   const minCap=n>0?Math.ceil((100/n)*10)/10:0;
   const capWarn=state.cap<minCap;
   return (
@@ -1007,7 +1010,8 @@ const Step4 = ({state, set, onBack}) => {
     setBusy(true);setErr('');setRes(null);setStale(false);
     const ids=(state.filteredIds&&state.filteredIds.length>0)?state.filteredIds:state.selectedCoins;
     try {
-      const data=await api.post('/api/backtest',{coin_ids:ids,start_date:start,end_date:end,method:state.method,cap:state.cap/100,floor:state.floor/100,rebalance_freq:state.rebalFreq,initial_investment:inv,aum_fee:(state.aumFee??1)/100,rebalancing_fee:(state.rebFee??0.3)/100,performance_fee:(state.perfFee??15)/100});
+      const indexSz=state.indexSize&&state.indexSize<ids.length?state.indexSize:null;
+      const data=await api.post('/api/backtest',{coin_ids:ids,start_date:start,end_date:end,method:state.method,cap:state.cap/100,floor:state.floor/100,rebalance_freq:state.rebalFreq,initial_investment:inv,aum_fee:(state.aumFee??1)/100,rebalancing_fee:(state.rebFee??0.3)/100,performance_fee:(state.perfFee??15)/100,index_size:indexSz});
       setRes(data);
       set(s=>({...s,results:data,startDate:start,endDate:end,initInv:inv}));
     } catch(e){setErr(e.message);}
@@ -1124,7 +1128,7 @@ const Step4 = ({state, set, onBack}) => {
             </div>
             <div style={card}>
               <div style={{fontWeight:600,fontSize:13,marginBottom:14}}>Strategy Config</div>
-              {[['Universe',`${res.coin_count} coins`],['Method',state.method==='market_cap'?'Market Cap Weighted':'Equal Weighted'],['Cap / Floor',`${state.cap}% / ${state.floor}%`],['Rebalancing',state.rebalFreq],['AUM Fee',`${state.aumFee??1}% p.a.`],['Perf. Fee',`${state.perfFee??15}% (weekly)`],['ATH Value',`$${Number(res.high_watermark||0).toLocaleString()}`]].map(([k,v])=>(
+              {([['Universe',(res.universe_size&&res.universe_size>res.coin_count)?`${res.universe_size} coins`:`${res.coin_count} coins`],(res.universe_size&&res.universe_size>res.coin_count)?['Index Size',`Top ${res.coin_count}`]:null,['Method',state.method==='market_cap'?'Market Cap Weighted':'Equal Weighted'],['Cap / Floor',`${state.cap}% / ${state.floor}%`],['Rebalancing',state.rebalFreq],['AUM Fee',`${state.aumFee??1}% p.a.`],['Perf. Fee',`${state.perfFee??15}% (HWM)`],['ATH Value',`$${Number(res.high_watermark||0).toLocaleString()}`]]).filter(Boolean).map(([k,v])=>(
                 <div key={k} style={{display:'flex',justifyContent:'space-between',padding:'5px 0',borderBottom:'1px solid var(--border)'}}>
                   <span style={{fontSize:12,color:'var(--muted)'}}>{k}</span>
                   <span style={{fontSize:12,fontWeight:500}}>{v}</span>
@@ -1194,7 +1198,7 @@ const Drawer = ({onLoad, onClose}) => {
 };
 
 // ══ ROOT
-const INIT={selectedCoins:[],filteredIds:[],selCats:[],noStable:true,noMeme:false,noCex:false,topX:300,minMcap:0,minVol:0,method:'market_cap',cap:30,floor:0.1,rebalFreq:'monthly',aumFee:1,rebFee:0.3,perfFee:15,startDate:'2022-01-01',endDate:new Date().toISOString().slice(0,10),initInv:1000,results:null};
+const INIT={selectedCoins:[],filteredIds:[],indexSize:null,selCats:[],noStable:true,noMeme:false,noCex:false,topX:300,minMcap:0,minVol:0,method:'market_cap',cap:30,floor:0.1,rebalFreq:'monthly',aumFee:1,rebFee:0.3,perfFee:15,startDate:'2022-01-01',endDate:new Date().toISOString().slice(0,10),initInv:1000,results:null};
 
 const App=()=>{
   const [step,setStep]=useState(0);
