@@ -1,4 +1,14 @@
-"""Weighting engine — market cap weighted and equal weighted with iterative cap/floor."""
+"""
+Weighting engine — market cap weighted (30/30/40 rule) and equal weighted.
+
+Market Cap rule:
+  - Coins sorted by market cap descending
+  - Rank 1: 30%  |  Rank 2: 30%  |  Ranks 3-N: proportional share of 40%
+  - Edge cases: n=1 → 100%; n=2 → 50%/50%
+
+Equal Weight rule:
+  - Every coin gets 1/N (20% each for a 5-coin index)
+"""
 
 from typing import Dict, List
 
@@ -6,71 +16,33 @@ from typing import Dict, List
 def compute_weights(
     coins: List[dict],
     method: str,
-    cap: float = 0.30,
-    floor: float = 0.001,
+    cap: float = 0.30,    # retained for API compat, unused in market_cap
+    floor: float = 0.001, # retained for API compat, unused in market_cap
 ) -> Dict[str, float]:
-    """
-    Compute portfolio weights for a list of coins.
-
-    Cap/floor enforcement is ITERATIVE — a single pass is wrong because
-    redistributing excess from a capped coin can push another over the cap.
-
-    Auto-adjustments (silent, surface via app.py warnings):
-      - Floor too high for coin count: reduced to 0.9/n
-      - Cap below equal-weight:        raised to 1/n + epsilon
-    """
     valid = [c for c in coins if c.get("market_cap") and c["market_cap"] > 0]
     n = len(valid)
     if n == 0:
         raise ValueError("No coins with valid market cap data")
 
-    if floor * n > 1.0:
-        floor = 0.9 / n
-
-    min_viable_cap = 1.0 / n
-    if cap < min_viable_cap:
-        cap = min_viable_cap + 0.001
+    if method == "equal":
+        return {c["id"]: 1.0 / n for c in valid}
 
     if method == "market_cap":
-        total = sum(c["market_cap"] for c in valid)
-        weights = {c["id"]: c["market_cap"] / total for c in valid}
-    elif method == "equal":
-        weights = {c["id"]: 1.0 / n for c in valid}
-    else:
-        raise ValueError(f"Unknown method: {method}")
+        ranked = sorted(valid, key=lambda c: c["market_cap"], reverse=True)
+        if n == 1:
+            return {ranked[0]["id"]: 1.0}
+        if n == 2:
+            return {ranked[0]["id"]: 0.50, ranked[1]["id"]: 0.50}
+        # Top 2 fixed at 30% each; remainder split proportionally
+        weights = {ranked[0]["id"]: 0.30, ranked[1]["id"]: 0.30}
+        rest = ranked[2:]
+        rem_total = sum(c["market_cap"] for c in rest)
+        for c in rest:
+            weights[c["id"]] = (0.40 * c["market_cap"] / rem_total
+                                if rem_total > 0 else 0.40 / len(rest))
+        return weights
 
-    # Iterative cap/floor enforcement
-    for _ in range(200):
-        changed = False
-        floor_deficit = sum(max(0, floor - w) for w in weights.values())
-        if floor_deficit > 0:
-            for cid in list(weights):
-                if weights[cid] < floor:
-                    weights[cid] = floor
-                    changed = True
-            above = {cid: w for cid, w in weights.items() if w > floor}
-            total_above = sum(above.values())
-            if total_above > 0:
-                for cid in above:
-                    weights[cid] -= floor_deficit * (above[cid] / total_above)
-
-        cap_excess = sum(max(0, w - cap) for w in weights.values())
-        if cap_excess > 0:
-            for cid in list(weights):
-                if weights[cid] > cap:
-                    weights[cid] = cap
-                    changed = True
-            below = {cid: w for cid, w in weights.items() if w < cap}
-            total_below = sum(below.values())
-            if total_below > 0:
-                for cid in below:
-                    weights[cid] += cap_excess * (below[cid] / total_below)
-
-        if not changed:
-            break
-
-    total = sum(weights.values())
-    return {cid: w / total for cid, w in weights.items()}
+    raise ValueError(f"Unknown method: {method}")
 
 
 def compute_weights_from_mcaps(

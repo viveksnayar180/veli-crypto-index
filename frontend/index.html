@@ -511,18 +511,15 @@ const Step1 = ({state, set, onNext}) => {
     return ()=>document.removeEventListener('mousedown', handler);
   },[]);
 
-  const MAJOR=['bitcoin','ethereum','binancecoin','solana','ripple','cardano','avalanche-2','chainlink','polkadot','litecoin'];
-
   const apply=(t, coinList)=>{
     const c=(coinList||coins).filter(c=>!c.is_stablecoin);
-    const newCoins = t==='top300'?c.slice(0,300).map(x=>x.id):t==='top500'?c.slice(0,500).map(x=>x.id):MAJOR;
-    const newTopX  = t==='top300'?300:t==='top500'?500:newCoins.length;
+    const newCoins = t==='top10'?c.slice(0,10).map(x=>x.id):t==='top300'?c.slice(0,300).map(x=>x.id):c.slice(0,500).map(x=>x.id);
+    const newTopX  = t==='top10'?10:t==='top300'?300:500;
     setTpl(t);
-    set(s=>({...s, selectedCoins:newCoins, topX:newTopX, filteredIds:[]}));
+    set(s=>({...s, selectedCoins:newCoins, topX:newTopX, filteredIds:[], pickedCoinIds:[]}));
   };
   const handleTpl=(t)=>{
     setPending(t); setTpl(t);
-    if(t==='btc_major'){ apply(t); return; }
     if(coins.length) apply(t);
   };
   useEffect(()=>{ if(coins.length) apply(pendingTpl, coins); },[coins.length]);
@@ -586,7 +583,7 @@ const Step1 = ({state, set, onNext}) => {
 
       {/* Template buttons */}
       <div style={{display:'grid',gridTemplateColumns:'repeat(3,1fr)',gap:10,marginBottom:20}}>
-        {[{k:'top300',l:'Top 300',s:'By market cap'},{k:'top500',l:'Top 500',s:'By market cap'},{k:'btc_major',l:'BTC + Majors',s:'10 blue chips'}].map(t=>(
+        {[{k:'top10',l:'Top 10',s:'By market cap'},{k:'top300',l:'Top 300',s:'By market cap'},{k:'top500',l:'Top 500',s:'By market cap'}].map(t=>(
           <button key={t.k} onClick={()=>handleTpl(t.k)} style={{...card,cursor:'pointer',border:`1px solid ${tpl===t.k?'var(--accent)':'var(--border)'}`,background:tpl===t.k?'rgba(61,139,255,0.08)':'var(--surface)',textAlign:'left',transition:'all .15s',display:'flex',justifyContent:'space-between',alignItems:'center'}}>
             <div>
               <div style={{fontWeight:600,fontSize:13,color:tpl===t.k?'var(--accent)':'var(--text)'}}>{t.l}</div>
@@ -760,125 +757,166 @@ const S2_CEX_IDS = new Set(['binancecoin','okb','crypto-com-chain','cronos','kuc
 
 // ══ STEP 2
 const Step2 = ({state, set, onNext, onBack, allCoins}) => {
-  const [cats,setCats]=useState([]);
   const [localCoins,setLocalCoins]=useState(allCoins||[]);
-  // String state for threshold inputs so decimals can be typed freely (e.g. "1." doesn't snap)
-  const [mcapStr,setMcapStr]=useState(state.minMcap?String(state.minMcap):'');
-  const [volStr, setVolStr] =useState(state.minVol ?String(state.minVol) :'');
-  const [coinsLoading,setCoinsLoading]=useState(!(allCoins&&allCoins.length>0));
-  useEffect(()=>{api.get('/api/categories').then(d=>setCats(d.categories)).catch(()=>{});}, []);
-  // Use allCoins prop if available, otherwise fetch independently
-  // This ensures Step2 always has coin data even if App's fetch isn't done yet
-  useEffect(()=>{
-    if(allCoins&&allCoins.length>0){ setLocalCoins(allCoins); setCoinsLoading(false); return; }
-    setCoinsLoading(true);
-    api.get('/api/coins?n=500').then(d=>{ setLocalCoins(d.coins); setCoinsLoading(false); }).catch(()=>setCoinsLoading(false));
-  },[allCoins]);
-  // Use localCoins when available, fall back to allCoins prop to avoid empty state on first render
-  const activeCoinList = localCoins.length>0 ? localCoins : (allCoins||[]);
-  const coinMap=useMemo(()=>Object.fromEntries(activeCoinList.map(c=>[c.id,c])),[activeCoinList]);
+  const [loading,setLoad]=useState(!(allCoins&&allCoins.length>0));
+  const [srch,setSrch]=useState('');
+  const [picked,setPicked]=useState(state.pickedCoinIds||[]);
 
-  // Attach categories + CEX flag to coins using module-level constants (CAT_MAP/CEX_IDS)
-  const enrichedCoinMap = useMemo(()=>{
-    const m = {};
+  useEffect(()=>{
+    if(allCoins&&allCoins.length>0){ setLocalCoins(allCoins); setLoad(false); return; }
+    setLoad(true);
+    api.get('/api/coins?n=500').then(d=>{ setLocalCoins(d.coins); setLoad(false); }).catch(()=>setLoad(false));
+  },[allCoins]);
+
+  const coinMap=useMemo(()=>Object.fromEntries(localCoins.map(c=>[c.id,c])),[localCoins]);
+
+  const enrichedMap=useMemo(()=>{
+    const m={};
     for(const [id,coin] of Object.entries(coinMap)){
-      const cats = [];
+      const cats=[];
       for(const [cat,ids] of Object.entries(S2_CAT_MAP)){ if(ids.has(id)) cats.push(cat); }
-      m[id] = {...coin, _cats: cats, _isCex: S2_CEX_IDS.has(id)};
+      m[id]={...coin,_cats:cats,_isCex:S2_CEX_IDS.has(id)};
     }
     return m;
   },[coinMap]);
 
-  const filtered=useMemo(()=>{
-    let cs=state.selectedCoins.map(id=>enrichedCoinMap[id]).filter(Boolean);
+  // Universe = coins from Step 1 selection, excluding filtered types
+  const universe=useMemo(()=>{
+    let cs=state.selectedCoins.map(id=>enrichedMap[id]).filter(Boolean);
     if(state.noStable) cs=cs.filter(c=>!c.is_stablecoin);
     if(state.noMeme)   cs=cs.filter(c=>!c._cats.includes('meme-token'));
     if(state.noCex)    cs=cs.filter(c=>!c._isCex);
-    // FIX: Apply thresholds BEFORE topX slice so topX gives top N qualifying coins
-    if(state.minMcap)  cs=cs.filter(c=>(c.market_cap||0)>=state.minMcap*1e9);
-    if(state.minVol)   cs=cs.filter(c=>(c.total_volume||0)>=state.minVol*1e6);
-    if(state.selCats?.length) cs=cs.filter(c=>c._cats.some(cat=>state.selCats.includes(cat)));
-    // topX is the index size — do NOT slice here; full universe goes to backtest engine
     return cs;
-  },[state,enrichedCoinMap]);
-  const togCat=id=>set(s=>({...s,selCats:s.selCats?.includes(id)?s.selCats.filter(x=>x!==id):[...(s.selCats||[]),id]}));
+  },[state.selectedCoins,state.noStable,state.noMeme,state.noCex,enrichedMap]);
+
+  const visible=useMemo(()=>{
+    if(!srch.trim()) return universe;
+    const q=srch.toLowerCase();
+    return universe.filter(c=>c.name.toLowerCase().includes(q)||c.symbol.toLowerCase().includes(q));
+  },[universe,srch]);
+
+  const MAX=5;
+  const isPicked=id=>picked.includes(id);
+  const toggle=id=>{
+    if(isPicked(id)){ setPicked(p=>p.filter(x=>x!==id)); }
+    else if(picked.length<MAX){ setPicked(p=>[...p,id]); }
+  };
+
+  const pickedCoins=useMemo(()=>
+    picked.map(id=>enrichedMap[id]).filter(Boolean).sort((a,b)=>(b.market_cap||0)-(a.market_cap||0))
+  ,[picked,enrichedMap]);
+
+  // Live weight preview using the same 30/30/40 rule
+  const previewWeights=useMemo(()=>{
+    const sorted=pickedCoins;
+    const n=sorted.length;
+    if(n===0) return {};
+    if(state.method==='equal') return Object.fromEntries(sorted.map(c=>[c.id,100/n]));
+    if(n===1) return {[sorted[0].id]:100};
+    if(n===2) return {[sorted[0].id]:50,[sorted[1].id]:50};
+    const rest=sorted.slice(2);
+    const remMcap=rest.reduce((s,c)=>s+(c.market_cap||0),0);
+    const w={[sorted[0].id]:30,[sorted[1].id]:30};
+    rest.forEach(c=>{ w[c.id]=remMcap>0?40*(c.market_cap||0)/remMcap:40/rest.length; });
+    return w;
+  },[pickedCoins,state.method]);
+
+  const canGo=picked.length>=2&&!loading;
+
+  const handleNext=()=>{
+    set(s=>({...s,
+      pickedCoinIds:picked,
+      filteredIds:universe.map(c=>c.id),
+      indexSize:picked.length,
+    }));
+    onNext();
+  };
+
   return (
     <div className="fade-up">
-      <h2 style={{fontSize:20,fontWeight:600,marginBottom:4}}>Apply Filters</h2>
-      <p style={{color:'var(--muted)',fontSize:13,marginBottom:24}}>Narrow down which coins make the cut.</p>
-      <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:16,marginBottom:16}}>
-        <div style={{display:'flex',flexDirection:'column',gap:14}}>
-          <div style={card}>
-            <div style={{color:'var(--muted)',fontSize:11,textTransform:'uppercase',letterSpacing:'0.08em',marginBottom:14}}>Exclusions</div>
-            <div style={{display:'flex',flexDirection:'column',gap:12}}>
-              <Toggle on={state.noStable} onChange={v=>set(s=>({...s,noStable:v}))} label="Remove stablecoins"/>
-              <Toggle on={state.noMeme}   onChange={v=>set(s=>({...s,noMeme:v}))}   label="Remove meme coins"/>
-              <Toggle on={state.noCex}    onChange={v=>set(s=>({...s,noCex:v}))}    label="Remove CEX tokens"/>
-            </div>
+      <h2 style={{fontSize:20,fontWeight:600,marginBottom:4}}>Build Your Index</h2>
+      <p style={{color:'var(--muted)',fontSize:13,marginBottom:16}}>Pick up to 5 coins from the universe. At each rebalance the engine holds the top-ranked coins from the full universe — swapping out any that fall in rank.</p>
+      <div style={{display:'flex',gap:16,marginBottom:14,flexWrap:'wrap',alignItems:'center'}}>
+        <Toggle on={state.noStable} onChange={v=>set(s=>({...s,noStable:v}))} label="Remove stablecoins"/>
+        <Toggle on={state.noMeme}   onChange={v=>set(s=>({...s,noMeme:v}))}   label="Remove meme coins"/>
+        <Toggle on={state.noCex}    onChange={v=>set(s=>({...s,noCex:v}))}    label="Remove CEX tokens"/>
+        <span style={{marginLeft:'auto',color:'var(--muted)',fontSize:12}}>{universe.length} coins in universe</span>
+      </div>
+      <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:16,marginBottom:16,alignItems:'start'}}>
+        {/* Left — coin list */}
+        <div style={card}>
+          <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:10}}>
+            <span style={{color:'var(--muted)',fontSize:11,textTransform:'uppercase',letterSpacing:'0.08em'}}>Select Coins</span>
+            <Badge label={`${picked.length}/${MAX} picked`} color={picked.length===MAX?'var(--green)':'var(--accent2)'}/>
           </div>
-          <div style={card}>
-            <div style={{color:'var(--muted)',fontSize:11,textTransform:'uppercase',letterSpacing:'0.08em',marginBottom:16}}>Universe Size</div>
-            <Slider label="Top X by market cap" value={state.topX ?? state.selectedCoins.length} onChange={v=>set(s=>({...s,topX:v}))} min={2} max={Math.max(2,Math.min(state.selectedCoins.length,500))} step={1} fmt={v=>`Top ${v}`}/>
-          </div>
-          <div style={card}>
-            <div style={{color:'var(--muted)',fontSize:11,textTransform:'uppercase',letterSpacing:'0.08em',marginBottom:14}}>Thresholds</div>
-            <div style={{display:'flex',flexDirection:'column',gap:12}}>
-              <div>
-                <div style={{color:'var(--muted)',fontSize:12,marginBottom:5}}>Min Market Cap ($B) — e.g. 1 = $1B</div>
-                <input type="text" inputMode="decimal" placeholder="e.g. 1"
-                  value={mcapStr}
-                  onChange={e=>{ setMcapStr(e.target.value); const v=parseFloat(e.target.value); set(s=>({...s,minMcap:isNaN(v)?0:v})); }}
-                  onBlur={()=>{ const v=parseFloat(mcapStr); setMcapStr(isNaN(v)?'':String(v)); }}
-                  style={inp}/>
-              </div>
-              <div>
-                <div style={{color:'var(--muted)',fontSize:12,marginBottom:5}}>Min 24h Volume ($M) — e.g. 10 = $10M</div>
-                <input type="text" inputMode="decimal" placeholder="e.g. 100"
-                  value={volStr}
-                  onChange={e=>{ setVolStr(e.target.value); const v=parseFloat(e.target.value); set(s=>({...s,minVol:isNaN(v)?0:v})); }}
-                  onBlur={()=>{ const v=parseFloat(volStr); setVolStr(isNaN(v)?'':String(v)); }}
-                  style={inp}/>
-              </div>
-            </div>
+          <input type="text" placeholder="Search by name or symbol…" value={srch} onChange={e=>setSrch(e.target.value)} style={{...inp,marginBottom:10,fontSize:12}}/>
+          <div style={{maxHeight:320,overflowY:'auto'}}>
+            {loading?(
+              <div style={{textAlign:'center',padding:'24px 0',color:'var(--muted)',fontSize:12,display:'flex',alignItems:'center',justifyContent:'center',gap:8}}><Spin sz={14}/> Loading…</div>
+            ):visible.slice(0,60).map((c,i)=>{
+              const sel=isPicked(c.id);
+              const disabled=!sel&&picked.length>=MAX;
+              return(
+                <div key={c.id} onClick={()=>!disabled&&toggle(c.id)}
+                  style={{display:'flex',alignItems:'center',gap:8,padding:'6px 8px',borderRadius:6,marginBottom:2,
+                    cursor:disabled?'not-allowed':'pointer',
+                    background:sel?'rgba(61,139,255,0.12)':'transparent',
+                    border:sel?'1px solid rgba(61,139,255,0.3)':'1px solid transparent',
+                    opacity:disabled?0.35:1,transition:'background .1s'}}>
+                  <span style={{color:'var(--muted)',fontSize:10,width:22,textAlign:'right',fontFamily:'var(--mono)',flexShrink:0}}>{i+1}</span>
+                  <div style={{width:20,height:20,borderRadius:'50%',background:'var(--raised)',overflow:'hidden',flexShrink:0}}>
+                    {c.image&&<img src={c.image} style={{width:'100%',height:'100%'}} alt="" onError={e=>e.target.style.display='none'}/>}
+                  </div>
+                  <span style={{flex:1,fontSize:12,color:sel?'var(--accent)':'#94a3b8',fontWeight:sel?600:400}}>{c.name}</span>
+                  <span style={{fontSize:10,fontFamily:'var(--mono)',color:'var(--muted)'}}>{c.symbol?.toUpperCase()}</span>
+                  {sel&&<span style={{fontSize:11,color:'var(--accent)',fontWeight:700,flexShrink:0}}>✓</span>}
+                </div>
+              );
+            })}
+            {visible.length>60&&<div style={{color:'var(--muted)',fontSize:11,padding:'4px 8px'}}>+{visible.length-60} more — use search to narrow down</div>}
           </div>
         </div>
-        <div style={{display:'flex',flexDirection:'column',gap:14}}>
-          <div style={card}>
-            <div style={{color:'var(--muted)',fontSize:11,textTransform:'uppercase',letterSpacing:'0.08em',marginBottom:14}}>Category Filter</div>
-            <div style={{display:'flex',flexWrap:'wrap',gap:7}}>
-              {cats.map(cat=>{const on=state.selCats?.includes(cat.id);return(<button key={cat.id} onClick={()=>togCat(cat.id)} style={{padding:'5px 12px',borderRadius:20,fontSize:12,fontWeight:500,cursor:'pointer',background:on?`${cat.color}22`:'var(--raised)',border:`1px solid ${on?cat.color+'66':'var(--border2)'}`,color:on?cat.color:'var(--muted)',transition:'all .15s'}}>{cat.name}</button>);})}
-            </div>
-          </div>
-          <div style={{...card,flex:1}}>
-            <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:12}}>
-              <span style={{color:'var(--muted)',fontSize:11,textTransform:'uppercase',letterSpacing:'0.08em'}}>Live Preview</span>
-              <Badge label={`${filtered.length} coins`} color="var(--accent2)"/>
-            </div>
-            <div style={{maxHeight:240,overflowY:'auto'}}>
-              {filtered.slice(0,25).map((c,i)=>(
-                <div key={c.id} style={{display:'flex',alignItems:'center',gap:8,padding:'5px 0',borderBottom:'1px solid var(--border)'}}>
-                  <span style={{color:'var(--muted)',fontSize:10,width:18,textAlign:'right',fontFamily:'var(--mono)'}}>{i+1}</span>
-                  <div style={{width:18,height:18,borderRadius:'50%',background:'var(--raised)',overflow:'hidden',flexShrink:0}}>{c.image&&<img src={c.image} style={{width:'100%',height:'100%'}} alt="" onError={e=>e.target.style.display='none'}/>}</div>
-                  <span style={{flex:1,fontSize:12,color:'#94a3b8'}}>{c.name}</span>
-                  <span style={{fontSize:10,fontFamily:'var(--mono)',color:'var(--muted)'}}>{c.symbol?.toUpperCase()}</span>
+        {/* Right — your index */}
+        <div style={{...card,display:'flex',flexDirection:'column',gap:0}}>
+          <div style={{color:'var(--muted)',fontSize:11,textTransform:'uppercase',letterSpacing:'0.08em',marginBottom:14}}>Your Index</div>
+          {pickedCoins.length===0?(
+            <div style={{color:'var(--muted)',fontSize:12,padding:'24px 0',textAlign:'center',borderTop:'1px dashed var(--border)'}}>← Click coins to add them</div>
+          ):(
+            pickedCoins.map((c,i)=>{
+              const w=previewWeights[c.id]||0;
+              const isTop2=state.method==='market_cap'&&i<2;
+              return(
+                <div key={c.id} style={{display:'flex',alignItems:'center',gap:8,padding:'8px 0',borderBottom:'1px solid var(--border)'}}>
+                  <span style={{color:'var(--muted)',fontSize:10,width:16,fontFamily:'var(--mono)',flexShrink:0}}>#{i+1}</span>
+                  <div style={{width:20,height:20,borderRadius:'50%',background:'var(--raised)',overflow:'hidden',flexShrink:0}}>
+                    {c.image&&<img src={c.image} style={{width:'100%',height:'100%'}} alt="" onError={e=>e.target.style.display='none'}/>}
+                  </div>
+                  <span style={{flex:1,fontSize:12,color:'var(--text)'}}>{c.name}</span>
+                  <span style={{fontFamily:'var(--mono)',fontSize:12,fontWeight:700,color:isTop2?'var(--accent)':'var(--accent2)',marginRight:6}}>{w.toFixed(1)}%</span>
+                  <button onClick={()=>toggle(c.id)} style={{background:'none',border:'none',color:'var(--muted)',cursor:'pointer',fontSize:16,padding:'0 2px',lineHeight:1,flexShrink:0}}>×</button>
                 </div>
-              ))}
-              {filtered.length>25&&<div style={{color:'var(--muted)',fontSize:11,paddingTop:6}}>+{filtered.length-25} more…</div>}
+              );
+            })
+          )}
+          {Array.from({length:Math.max(0,MAX-pickedCoins.length)}).map((_,i)=>(
+            <div key={i} style={{display:'flex',alignItems:'center',gap:8,padding:'8px 0',borderBottom:'1px dashed var(--border)',opacity:0.25}}>
+              <span style={{color:'var(--muted)',fontSize:10,width:16,fontFamily:'var(--mono)',flexShrink:0}}>#{pickedCoins.length+i+1}</span>
+              <div style={{width:20,height:20,borderRadius:'50%',border:'1px dashed var(--border2)'}}/>
+              <span style={{fontSize:12,color:'var(--muted)'}}>empty slot</span>
             </div>
-          </div>
+          ))}
+          {pickedCoins.length>0&&(
+            <div style={{marginTop:12,padding:'10px 12px',background:'rgba(255,255,255,0.04)',borderRadius:8,fontSize:11,color:'var(--muted)',lineHeight:1.6}}>
+              <div style={{marginBottom:2}}><span style={{color:'var(--text)',fontWeight:500}}>Weighting:</span> {state.method==='market_cap'?'Ranks #1 & #2 → 30% fixed · Ranks #3–5 → 40% split by mcap':'Equal 20% each'}</div>
+              <div><span style={{color:'var(--text)',fontWeight:500}}>Swapping:</span> Dynamic — coins ranked out of the top {picked.length} are replaced at each rebalance</div>
+            </div>
+          )}
         </div>
       </div>
-      {coinsLoading&&(
-        <div style={{textAlign:'center',padding:'20px 0',color:'var(--muted)',fontSize:13,display:'flex',alignItems:'center',justifyContent:'center',gap:10}}>
-          <Spin sz={16}/> Loading coin data…
-        </div>
-      )}
       <div style={{display:'flex',justifyContent:'space-between',alignItems:'center'}}>
         <button onClick={onBack} style={btn('ghost')}>← Back</button>
-        <button onClick={()=>{set(s=>({...s,filteredIds:filtered.map(c=>c.id),indexSize:state.topX||null}));onNext();}}
-          disabled={filtered.length<2||coinsLoading}
-          style={{...btn(),opacity:(filtered.length<2||coinsLoading)?0.4:1}}>
-          {coinsLoading?'Loading…':'Portfolio Construction →'}
+        <button onClick={handleNext} disabled={!canGo} style={{...btn(),opacity:canGo?1:0.4}}>
+          {loading?'Loading…':'Portfolio Construction →'}
         </button>
       </div>
     </div>
@@ -898,22 +936,17 @@ const Step3 = ({state, set, onNext, onBack}) => {
   const commitFee=(k,v)=>{ const n=parseFloat(v); if(!isNaN(n)&&n>=0) set(s=>({...s,[k]:n})); };
   // Fix: inline all deps directly in useEffect — no stale closure, fires on mount and on any change
   useEffect(()=>{
-    const coinIds = (state.filteredIds && state.filteredIds.length > 0)
-      ? state.filteredIds
-      : state.selectedCoins;
+    // Use the 5 manually picked coins for the weight preview
+    const coinIds = (state.pickedCoinIds && state.pickedCoinIds.length > 0)
+      ? state.pickedCoinIds
+      : (state.filteredIds && state.filteredIds.length > 0 ? state.filteredIds.slice(0,5) : state.selectedCoins.slice(0,5));
     if (!coinIds || coinIds.length === 0) return;
-    // Preview shows top indexSize (or topX) coins — never more than 30 for display
-    const previewN = Math.min(state.indexSize || state.topX || coinIds.length, 30);
-    const ids = coinIds.slice(0, previewN).join(',');
+    const ids = coinIds.join(',');
     setLW(true);
-    api.get(`/api/coins/preview?ids=${ids}&method=${state.method}&cap=${state.cap/100}&floor=${state.floor/100}`)
+    api.get(`/api/coins/preview?ids=${ids}&method=${state.method}&cap=0.3&floor=0.001`)
        .then(d=>{ setW(d.weights); setLW(false); })
        .catch(()=>setLW(false));
-  },[state.filteredIds, state.selectedCoins, state.indexSize, state.topX, state.method, state.cap, state.floor]);
-  const universeN=((state.filteredIds&&state.filteredIds.length>0)?state.filteredIds:state.selectedCoins).length;
-  const n=state.indexSize&&state.indexSize<universeN?state.indexSize:universeN;
-  const minCap=n>0?Math.ceil((100/n)*10)/10:0;
-  const capWarn=state.cap<minCap;
+  },[state.pickedCoinIds, state.filteredIds, state.selectedCoins, state.method]);
   return (
     <div className="fade-up">
       <h2 style={{fontSize:20,fontWeight:600,marginBottom:4}}>Portfolio Construction</h2>
@@ -933,11 +966,10 @@ const Step3 = ({state, set, onNext, onBack}) => {
             </div>
           </div>
           <div style={card}>
-            <div style={{color:'var(--muted)',fontSize:11,textTransform:'uppercase',letterSpacing:'0.08em',marginBottom:16}}>Constraints</div>
-            <div style={{display:'flex',flexDirection:'column',gap:18}}>
-              <Slider label="Max per coin (Cap)" value={state.cap} onChange={v=>set(s=>({...s,cap:v}))} min={1} max={100}/>
-              {capWarn&&<div style={{background:'rgba(245,158,11,0.1)',border:'1px solid rgba(245,158,11,0.3)',borderRadius:7,padding:'8px 12px',fontSize:11,color:'var(--amber)'}}>⚠ Cap {state.cap}% below min {minCap}% for {n} coins — will auto-adjust.</div>}
-              <Slider label="Min per coin (Floor)" value={state.floor} onChange={v=>set(s=>({...s,floor:v}))} min={0} max={10} step={0.1} fmt={v=>`${v}%`}/>
+            <div style={{color:'var(--muted)',fontSize:11,textTransform:'uppercase',letterSpacing:'0.08em',marginBottom:10}}>Weight Rule</div>
+            <div style={{fontSize:12,color:'var(--muted)',lineHeight:1.7}}>
+              <div><span style={{color:'var(--text)',fontWeight:500}}>Market Cap:</span> Rank #1 → 30% · Rank #2 → 30% · Ranks #3–5 → 40% split by mcap</div>
+              <div><span style={{color:'var(--text)',fontWeight:500}}>Equal:</span> Every coin → 20%</div>
             </div>
           </div>
           <div style={card}>
@@ -947,7 +979,7 @@ const Step3 = ({state, set, onNext, onBack}) => {
           <div style={card}>
             <div style={{color:'var(--muted)',fontSize:11,textTransform:'uppercase',letterSpacing:'0.08em',marginBottom:14}}>Fee Structure</div>
             <div style={{display:'grid',gridTemplateColumns:'1fr 1fr 1fr',gap:12}}>
-              {[{k:'aumFee',l:'AUM Fee (% p.a.)',p:'1.0',h:'Weekly 1/52'},{k:'rebFee',l:'Rebalancing Fee (%)',p:'0.3',h:'Per rebalance'},{k:'perfFee',l:'Performance Fee (%)',p:'15',h:'Weekly crystallisation'}].map(f=>(
+              {[{k:'aumFee',l:'AUM Fee (% p.a.)',p:'1.0',h:'Weekly 1/52'},{k:'rebFee',l:'Rebalancing Fee (%)',p:'0.3',h:'Per rebalance'},{k:'perfFee',l:'Performance Fee (%)',p:'15',h:'New ATH only (HWM)'}].map(f=>(
                 <div key={f.k}>
                   <div style={{color:'var(--muted)',fontSize:12,marginBottom:4}}>{f.l}</div>
                   <input type="text" inputMode="decimal" placeholder={f.p}
@@ -1008,10 +1040,11 @@ const Step4 = ({state, set, onBack}) => {
 
   const run=async()=>{
     setBusy(true);setErr('');setRes(null);setStale(false);
+    // Full universe (for dynamic swapping) + index_size = how many coins to hold
     const ids=(state.filteredIds&&state.filteredIds.length>0)?state.filteredIds:state.selectedCoins;
+    const indexSz=(state.indexSize&&state.indexSize<ids.length)?state.indexSize:null;
     try {
-      const indexSz=state.indexSize&&state.indexSize<ids.length?state.indexSize:null;
-      const data=await api.post('/api/backtest',{coin_ids:ids,start_date:start,end_date:end,method:state.method,cap:state.cap/100,floor:state.floor/100,rebalance_freq:state.rebalFreq,initial_investment:inv,aum_fee:(state.aumFee??1)/100,rebalancing_fee:(state.rebFee??0.3)/100,performance_fee:(state.perfFee??15)/100,index_size:indexSz});
+      const data=await api.post('/api/backtest',{coin_ids:ids,start_date:start,end_date:end,method:state.method,cap:0.30,floor:0.001,rebalance_freq:state.rebalFreq,initial_investment:inv,aum_fee:(state.aumFee??1)/100,rebalancing_fee:(state.rebFee??0.3)/100,performance_fee:(state.perfFee??15)/100,index_size:indexSz});
       setRes(data);
       set(s=>({...s,results:data,startDate:start,endDate:end,initInv:inv}));
     } catch(e){setErr(e.message);}
@@ -1198,7 +1231,7 @@ const Drawer = ({onLoad, onClose}) => {
 };
 
 // ══ ROOT
-const INIT={selectedCoins:[],filteredIds:[],indexSize:null,selCats:[],noStable:true,noMeme:false,noCex:false,topX:300,minMcap:0,minVol:0,method:'market_cap',cap:30,floor:0.1,rebalFreq:'monthly',aumFee:1,rebFee:0.3,perfFee:15,startDate:'2022-01-01',endDate:new Date().toISOString().slice(0,10),initInv:1000,results:null};
+const INIT={selectedCoins:[],filteredIds:[],pickedCoinIds:[],indexSize:null,selCats:[],noStable:true,noMeme:false,noCex:false,topX:300,minMcap:0,minVol:0,method:'market_cap',cap:30,floor:0.1,rebalFreq:'monthly',aumFee:1,rebFee:0.3,perfFee:15,startDate:'2022-01-01',endDate:new Date().toISOString().slice(0,10),initInv:1000,results:null};
 
 const App=()=>{
   const [step,setStep]=useState(0);
