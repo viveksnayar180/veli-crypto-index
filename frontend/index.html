@@ -770,24 +770,15 @@ const Step2 = ({state, set, onNext, onBack, allCoins}) => {
 
   const coinMap=useMemo(()=>Object.fromEntries(localCoins.map(c=>[c.id,c])),[localCoins]);
 
-  const enrichedMap=useMemo(()=>{
-    const m={};
-    for(const [id,coin] of Object.entries(coinMap)){
-      const cats=[];
-      for(const [cat,ids] of Object.entries(S2_CAT_MAP)){ if(ids.has(id)) cats.push(cat); }
-      m[id]={...coin,_cats:cats,_isCex:S2_CEX_IDS.has(id)};
-    }
-    return m;
-  },[coinMap]);
-
   // Universe = coins from Step 1 selection, excluding filtered types
+  // Uses backend-annotated flags: is_stablecoin, is_meme, is_cex
   const universe=useMemo(()=>{
-    let cs=state.selectedCoins.map(id=>enrichedMap[id]).filter(Boolean);
+    let cs=state.selectedCoins.map(id=>coinMap[id]).filter(Boolean);
     if(state.noStable) cs=cs.filter(c=>!c.is_stablecoin);
-    if(state.noMeme)   cs=cs.filter(c=>!c._cats.includes('meme-token'));
-    if(state.noCex)    cs=cs.filter(c=>!c._isCex);
+    if(state.noMeme)   cs=cs.filter(c=>!c.is_meme);
+    if(state.noCex)    cs=cs.filter(c=>!c.is_cex);
     return cs;
-  },[state.selectedCoins,state.noStable,state.noMeme,state.noCex,enrichedMap]);
+  },[state.selectedCoins,state.noStable,state.noMeme,state.noCex,coinMap]);
 
   const visible=useMemo(()=>{
     if(!srch.trim()) return universe;
@@ -812,8 +803,8 @@ const Step2 = ({state, set, onNext, onBack, allCoins}) => {
   };
 
   const pickedCoins=useMemo(()=>
-    picked.map(id=>enrichedMap[id]).filter(Boolean).sort((a,b)=>(b.market_cap||0)-(a.market_cap||0))
-  ,[picked,enrichedMap]);
+    picked.map(id=>coinMap[id]).filter(Boolean).sort((a,b)=>(b.market_cap||0)-(a.market_cap||0))
+  ,[picked,coinMap]);
 
   // Live weight preview using the same 30/30/40 rule
   const previewWeights=useMemo(()=>{

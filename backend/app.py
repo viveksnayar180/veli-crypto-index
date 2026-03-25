@@ -195,14 +195,33 @@ def api_coins_refresh():
 def api_coins():
     """GET /api/coins?n=500
     Returns top N coins with metadata, market cap, and category tags.
+    Annotates is_stablecoin, is_meme, is_cex using CoinGecko category API (cached 24h).
     """
     n = min(int(request.args.get("n", 500)), 500)
     try:
         fetcher = get_fetcher()
         coins   = fetcher.fetch_top_coins(n)
-        # Annotate stablecoin flag
+
+        # Pull category memberships from CoinGecko (each cached 24h independently)
+        try:
+            stable_ids = set(fetcher.fetch_category_coins("stablecoins"))
+        except Exception:
+            stable_ids = set()
+        try:
+            meme_ids = set(fetcher.fetch_category_coins("meme-token"))
+        except Exception:
+            meme_ids = set()
+        try:
+            cex_ids = set(fetcher.fetch_category_coins("centralized-exchange"))
+        except Exception:
+            cex_ids = set()
+
         for c in coins:
-            c["is_stablecoin"] = c["id"] in STABLECOINS
+            cid = c["id"]
+            c["is_stablecoin"] = cid in STABLECOINS or cid in stable_ids
+            c["is_meme"]       = cid in meme_ids
+            c["is_cex"]        = cid in cex_ids
+
         return jsonify({"coins": coins, "count": len(coins)})
     except Exception as e:
         return error(str(e), 500)
