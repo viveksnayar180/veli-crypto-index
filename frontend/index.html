@@ -759,6 +759,7 @@ const Step2 = ({state, set, onNext, onBack, allCoins}) => {
   const [loading,setLoad]=useState(!(allCoins&&allCoins.length>0));
   const [srch,setSrch]=useState('');
   const [picked,setPicked]=useState(state.pickedCoinIds||[]);
+  const [maxCoins,setMaxCoins]=useState(state.indexSize||5);
 
   useEffect(()=>{
     if(allCoins&&allCoins.length>0){ setLocalCoins(allCoins); setLoad(false); return; }
@@ -793,12 +794,20 @@ const Step2 = ({state, set, onNext, onBack, allCoins}) => {
     });
   },[universe]);
 
-  const MAX=5;
+  const MAX=maxCoins;
   const isPicked=id=>picked.includes(id);
   const toggle=id=>{
     if(isPicked(id)){ setPicked(p=>p.filter(x=>x!==id)); }
     else if(picked.length<MAX){ setPicked(p=>[...p,id]); }
   };
+  // When maxCoins shrinks below current picks, drop the excess (lowest mcap first)
+  useEffect(()=>{
+    setPicked(p=>{
+      if(p.length<=maxCoins) return p;
+      const sorted=[...p].sort((a,b)=>(coinMap[b]?.market_cap||0)-(coinMap[a]?.market_cap||0));
+      return sorted.slice(0,maxCoins);
+    });
+  },[maxCoins]);
 
   const pickedCoins=useMemo(()=>
     picked.map(id=>coinMap[id]).filter(Boolean).sort((a,b)=>(b.market_cap||0)-(a.market_cap||0))
@@ -825,7 +834,7 @@ const Step2 = ({state, set, onNext, onBack, allCoins}) => {
     set(s=>({...s,
       pickedCoinIds:picked,
       filteredIds:universe.map(c=>c.id),
-      indexSize:picked.length,
+      indexSize:maxCoins,
     }));
     onNext();
   };
@@ -833,19 +842,34 @@ const Step2 = ({state, set, onNext, onBack, allCoins}) => {
   return (
     <div className="fade-up">
       <h2 style={{fontSize:20,fontWeight:600,marginBottom:4}}>Build Your Index</h2>
-      <p style={{color:'var(--muted)',fontSize:13,marginBottom:16}}>Pick up to 5 coins from the universe. At each rebalance the engine holds the top-ranked coins from the full universe — swapping out any that fall in rank.</p>
+      <p style={{color:'var(--muted)',fontSize:13,marginBottom:16}}>Pick your starting coins and choose how many to hold. At each rebalance the engine holds the top-ranked coins from the full universe — swapping out any that fall in rank.</p>
       <div style={{display:'flex',gap:16,marginBottom:14,flexWrap:'wrap',alignItems:'center'}}>
         <Toggle on={state.noStable} onChange={v=>set(s=>({...s,noStable:v}))} label="Remove stablecoins"/>
         <Toggle on={state.noMeme}   onChange={v=>set(s=>({...s,noMeme:v}))}   label="Remove meme coins"/>
         <Toggle on={state.noCex}    onChange={v=>set(s=>({...s,noCex:v}))}    label="Remove CEX tokens"/>
         <span style={{marginLeft:'auto',color:'var(--muted)',fontSize:12}}>{universe.length} coins in universe</span>
       </div>
+      {/* Index size picker */}
+      <div style={{display:'flex',alignItems:'center',gap:12,marginBottom:14,padding:'10px 14px',background:'rgba(255,255,255,0.04)',borderRadius:8,border:'1px solid var(--border)'}}>
+        <span style={{fontSize:12,color:'var(--muted)',flexShrink:0}}>Index size:</span>
+        <input type="range" min={2} max={Math.min(50,universe.length||50)} value={maxCoins}
+          onChange={e=>setMaxCoins(Number(e.target.value))}
+          style={{flex:1,accentColor:'var(--accent)',cursor:'pointer'}}/>
+        <div style={{display:'flex',alignItems:'center',gap:4,flexShrink:0}}>
+          <button onClick={()=>setMaxCoins(m=>Math.max(2,m-1))}
+            style={{width:24,height:24,borderRadius:4,border:'1px solid var(--border2)',background:'var(--surface)',color:'var(--text)',cursor:'pointer',fontSize:14,lineHeight:1,display:'flex',alignItems:'center',justifyContent:'center'}}>−</button>
+          <span style={{fontFamily:'var(--mono)',fontSize:14,fontWeight:700,color:'var(--accent)',minWidth:28,textAlign:'center'}}>{maxCoins}</span>
+          <button onClick={()=>setMaxCoins(m=>Math.min(50,universe.length||50,m+1))}
+            style={{width:24,height:24,borderRadius:4,border:'1px solid var(--border2)',background:'var(--surface)',color:'var(--text)',cursor:'pointer',fontSize:14,lineHeight:1,display:'flex',alignItems:'center',justifyContent:'center'}}>+</button>
+        </div>
+        <span style={{fontSize:11,color:'var(--muted)',flexShrink:0}}>coins</span>
+      </div>
       <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:16,marginBottom:16,alignItems:'start'}}>
         {/* Left — coin list */}
         <div style={card}>
           <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:10}}>
             <span style={{color:'var(--muted)',fontSize:11,textTransform:'uppercase',letterSpacing:'0.08em'}}>Select Coins</span>
-            <Badge label={`${picked.length}/${MAX} picked`} color={picked.length===MAX?'var(--green)':'var(--accent2)'}/>
+            <Badge label={`${picked.length}/${MAX} picked`} color={picked.length>=2?'var(--green)':'var(--accent2)'}/>
           </div>
           <input type="text" placeholder="Search by name or symbol…" value={srch} onChange={e=>setSrch(e.target.value)} style={{...inp,marginBottom:10,fontSize:12}}/>
           <div style={{maxHeight:320,overflowY:'auto'}}>
@@ -896,17 +920,18 @@ const Step2 = ({state, set, onNext, onBack, allCoins}) => {
               );
             })
           )}
-          {Array.from({length:Math.max(0,MAX-pickedCoins.length)}).map((_,i)=>(
+          {Array.from({length:Math.min(10,Math.max(0,MAX-pickedCoins.length))}).map((_,i)=>(
             <div key={i} style={{display:'flex',alignItems:'center',gap:8,padding:'8px 0',borderBottom:'1px dashed var(--border)',opacity:0.25}}>
               <span style={{color:'var(--muted)',fontSize:10,width:16,fontFamily:'var(--mono)',flexShrink:0}}>#{pickedCoins.length+i+1}</span>
               <div style={{width:20,height:20,borderRadius:'50%',border:'1px dashed var(--border2)'}}/>
               <span style={{fontSize:12,color:'var(--muted)'}}>empty slot</span>
             </div>
           ))}
+          {MAX-pickedCoins.length>10&&<div style={{fontSize:11,color:'var(--muted)',padding:'6px 0',opacity:0.5}}>+{MAX-pickedCoins.length-10} more slots…</div>}
           {pickedCoins.length>0&&(
             <div style={{marginTop:12,padding:'10px 12px',background:'rgba(255,255,255,0.04)',borderRadius:8,fontSize:11,color:'var(--muted)',lineHeight:1.6}}>
-              <div style={{marginBottom:2}}><span style={{color:'var(--text)',fontWeight:500}}>Weighting:</span> {state.method==='market_cap'?'Ranks #1 & #2 → 30% fixed · Ranks #3–5 → 40% split by mcap':'Equal 20% each'}</div>
-              <div><span style={{color:'var(--text)',fontWeight:500}}>Swapping:</span> Dynamic — coins ranked out of the top {picked.length} are replaced at each rebalance</div>
+              <div style={{marginBottom:2}}><span style={{color:'var(--text)',fontWeight:500}}>Weighting:</span> {state.method==='market_cap'?`Ranks #1 & #2 → 30% fixed · Ranks #3–${MAX} → 40% split by mcap`:`Equal ${(100/MAX).toFixed(1)}% each`}</div>
+              <div><span style={{color:'var(--text)',fontWeight:500}}>Swapping:</span> Dynamic — coins ranked out of the top {MAX} are replaced at each rebalance</div>
             </div>
           )}
         </div>
