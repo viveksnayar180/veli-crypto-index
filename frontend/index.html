@@ -37,13 +37,11 @@ const { useState, useEffect, useCallback, useMemo, useRef } = React;
 // When opened as file:// or from a different server, we need to point at Flask.
 const API_BASE = (() => {
   const proto = window.location.protocol;
-  const host  = window.location.hostname;
-  const port  = window.location.port;
-  // Running from file:// or a non-Flask dev server → point at Flask on 8000
-  if (proto === 'file:' || (port && port !== '8000' && host === 'localhost')) {
-    return 'http://localhost:8000';
+  // Running from file:// → point at Flask on 5100
+  if (proto === 'file:') {
+    return 'http://localhost:5100';
   }
-  // Served by Flask directly (localhost:8000 or any deployed domain) → relative
+  // Served by Flask directly → use relative URLs
   return '';
 })();
 
