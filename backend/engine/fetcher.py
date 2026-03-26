@@ -14,9 +14,7 @@ from datetime import datetime
 from typing import Dict, List, Optional
 
 COINGECKO_API_KEY = os.environ.get("COINGECKO_API_KEY", "CG-uB6JDneXnjCYQrFR5Wf9dNH4")
-_DEMO_BASE = "https://api.coingecko.com/api/v3"
-_PRO_BASE  = "https://pro-api.coingecko.com/api/v3"
-COINGECKO_BASE = _DEMO_BASE if COINGECKO_API_KEY.startswith("CG-") else _PRO_BASE
+COINGECKO_BASE    = "https://pro-api.coingecko.com/api/v3"
 CACHE_DIR         = os.path.join(os.path.dirname(__file__), "..", ".cache")
 RATE_LIMIT_SLEEP  = 0.5    # Pro tier allows ~30 req/min; 0.5s is comfortable
 MAX_RETRIES       = 3
@@ -57,8 +55,7 @@ class CoinGeckoFetcher:
     def __init__(self):
         self.session = requests.Session()
         if COINGECKO_API_KEY:
-            header = _get_auth_header(COINGECKO_API_KEY)
-            self.session.headers.update(header)
+            self.session.headers.update({"x-cg-pro-api-key": COINGECKO_API_KEY})
 
     # ── Cache helpers ─────────────────────────────────────────────────────────
 
